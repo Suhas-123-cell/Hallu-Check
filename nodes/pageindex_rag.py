@@ -32,8 +32,9 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
-# ── BERTScore for Evaluation ────────────────────────────────────────────────
-from bert_score import score as bert_score  # type: ignore
+# ── NLI-based Alignment (replaces BERTScore) ────────────────────────────────
+# BERTScore measured word similarity, not factual correctness.
+# NLI alignment measures actual entailment — semantically correct.
 
 import tiktoken  # type: ignore[import-untyped]
 from huggingface_hub import InferenceClient  # type: ignore[import-untyped, import-not-found]
@@ -356,39 +357,63 @@ async def tree_search_retrieve(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7. BERTScore Evaluation Utility
+# 7. Alignment Scoring (NLI-based, replaces BERTScore)
 # ─────────────────────────────────────────────────────────────────────────────
-def evaluate_bertscore(candidate: str, reference: str, lang: str = "en", model_type: str = "distilbert-base-uncased") -> dict:
+def evaluate_alignment(candidate: str, reference: str) -> dict:
     """
-    Compute BERTScore (Precision, Recall, F1) between candidate and reference strings.
-    Uses distilbert-base-uncased for better Python 3.14+ compatibility.
-    
-    Args:
-        candidate: Generated context/output string.
-        reference: Reference (gold) context string.
-        lang: Language code (default: 'en').
-        model_type: BERTScore model (default: DistilBERT uncased - lightweight & compatible).
+    Compute NLI-based alignment between candidate (LLM output) and
+    reference (RAG context). Replaces BERTScore.
+
+    Why NLI instead of BERTScore:
+      - BERTScore measures word/embedding similarity
+      - "Modi is President" scores HIGH against "Modi is PM" on BERTScore
+      - NLI correctly classifies this as CONTRADICTION
+
     Returns:
-        Dict with precision, recall, and f1 scores (float).
+        Dict with 'alignment_score', 'precision', 'recall', 'f1' (for
+        backward compatibility), and 'method'.
     """
     try:
-        P, R, F1 = bert_score([candidate], [reference], lang=lang, model_type=model_type, verbose=False)
-        return {
-            "precision": float(P[0]),
-            "recall": float(R[0]),
-            "f1": float(F1[0]),
-        }
-    except (Exception, OverflowError) as e:
-        logger.warning("BERTScore evaluation failed: %s. Using fallback similarity metric.", e)
-        # Fallback: simple word overlap (Jaccard-like) for robustness
-        candidate_words = set(candidate.lower().split())
-        reference_words = set(reference.lower().split())
-        if not candidate_words or not reference_words:
-            return {"precision": 0.0, "recall": 0.0, "f1": 0.0}
-        intersection = candidate_words & reference_words
-        union = candidate_words | reference_words
-        jaccard = len(intersection) / len(union)
-        return {"precision": jaccard, "recall": jaccard, "f1": jaccard}
+        from nodes.nli_model import compute_nli_alignment, is_loaded, load_model  # type: ignore
+
+        if not is_loaded():
+            load_model()
+
+        if is_loaded():
+            result = compute_nli_alignment(candidate, reference)
+            score = result["alignment_score"]
+            return {
+                "precision": score,
+                "recall": score,
+                "f1": score,
+                "alignment_score": score,
+                "method": "nli",
+                "details": result.get("details", []),
+            }
+    except Exception as e:
+        logger.warning("NLI alignment failed (%s), using word-overlap fallback.", e)
+
+    # Fallback: simple word overlap (Jaccard-like)
+    candidate_words = set(candidate.lower().split())
+    reference_words = set(reference.lower().split())
+    if not candidate_words or not reference_words:
+        return {"precision": 0.0, "recall": 0.0, "f1": 0.0, "alignment_score": 0.0, "method": "fallback"}
+    intersection = candidate_words & reference_words
+    union = candidate_words | reference_words
+    jaccard = len(intersection) / len(union)
+    return {
+        "precision": jaccard,
+        "recall": jaccard,
+        "f1": jaccard,
+        "alignment_score": jaccard,
+        "method": "fallback",
+    }
+
+
+# Backward compatibility alias
+def evaluate_bertscore(candidate: str, reference: str, **kwargs) -> dict:
+    """DEPRECATED: Use evaluate_alignment() instead. Kept for backward compatibility."""
+    return evaluate_alignment(candidate, reference)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -423,16 +448,22 @@ async def run_pageindex_rag_with_bertscore(
     model_type: str = "distilbert-base-uncased",
 ) -> dict:
     """
-    Run the full PageIndex RAG pipeline and evaluate the output with BERTScore.
+    Run the full PageIndex RAG pipeline and evaluate the output with
+    NLI-based alignment scoring (replaces BERTScore).
+
+    The function name is preserved for backward compatibility but internally
+    uses NLI alignment when the model is available.
+
     Args:
         md_path: Path to the scraped Markdown file (output of Node 3).
         query:   The user's original query.
         llm_output: LLM answer to compare against retrieved context.
-        lang: Language code for BERTScore (default: 'en').
-        model_type: BERTScore model (default: DeBERTa large MNLI).
+        lang: (DEPRECATED) Ignored — kept for backward compatibility.
+        model_type: (DEPRECATED) Ignored — kept for backward compatibility.
     Returns:
-        Dict with 'rag_output' and 'bertscore' (precision, recall, f1).
+        Dict with 'rag_output' and 'bertscore' (precision, recall, f1,
+        alignment_score, method).
     """
     rag_output = await run_pageindex_rag(md_path, query)
-    bertscore = evaluate_bertscore(llm_output, rag_output, lang=lang, model_type=model_type)
-    return {"rag_output": rag_output, "bertscore": bertscore}
+    alignment = evaluate_alignment(llm_output, rag_output)
+    return {"rag_output": rag_output, "bertscore": alignment}

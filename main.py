@@ -27,12 +27,12 @@ from fastapi.middleware.cors import CORSMiddleware  # type: ignore[import-untype
 from pydantic import BaseModel, Field  # type: ignore[import-untyped, import-not-found]
 
 # ── Config ────────────────────────────────────────────────────────────────────
-from config import generate_md_path  # type: ignore[import-not-found]
+from config import generate_md_path, ENABLE_SELF_CONSISTENCY  # type: ignore[import-not-found]
 
 # ── Node imports ──────────────────────────────────────────────────────────────
 from nodes.gatekeeper import classify_query                   # type: ignore[import-not-found] # Node 0
 from nodes.generator import generate_llm_output               # type: ignore[import-not-found] # Node 1
-from nodes.web_search import extract_keywords, search_and_scrape  # type: ignore[import-not-found] # Nodes 2-3
+from nodes.web_search import extract_keywords, search_and_scrape, targeted_gap_search  # type: ignore[import-not-found] # Nodes 2-3
 from nodes.pageindex_rag import run_pageindex_rag_with_bertscore  # type: ignore[import-not-found] # Node 4+BERTScore
 from nodes.claim_verifier import verify_claims                 # type: ignore[import-not-found] # Node 5
 from nodes.refiner import refine_with_evidence, refine_response  # type: ignore[import-not-found] # Node 6
@@ -113,6 +113,7 @@ class GenerateResponse(BaseModel):
     hallucination_score: float                 # 0.0 (clean) → 1.0 (fully hallucinated)
     hallucination_detected: bool              # Clear boolean flag
     hallucination_summary: str                # Human-readable summary
+    verification_method: str = "gemini"       # "nli" or "gemini" — which verifier was used
     final_answer: str
 
 
@@ -161,12 +162,14 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
 
     # ── Node 5: Claim Verification (internal logic check) ────────────
     logger.info("── Node 5: Internal claim verification (no RAG context)…")
+    nli_alignment = bertscore.get("alignment_score", bertscore.get("f1", 0.5))
     hallu_report = await asyncio.to_thread(
         verify_claims,
         llm_output,
         rag_output,
         query,
         bertscore["f1"],
+        nli_alignment,
     )
 
     logger.info(
@@ -216,6 +219,7 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
         hallucination_score=hallu_report.hallucination_score,
         hallucination_detected=hallu_report.hallucination_detected,
         hallucination_summary=hallu_report.summary,
+        verification_method=hallu_report.verification_method,
         final_answer=final_answer,
     )
 
@@ -236,6 +240,24 @@ async def _handle_factual(query: str) -> GenerateResponse:
         # ── Node 1: LLM Generator ────────────────────────────────────
         logger.info("── Node 1: Generating preliminary answer with LLM…")
         llm_output = await asyncio.to_thread(generate_llm_output, query)
+
+        # ── Node 1.5: Self-Consistency Check (optional) ──────────────
+        consistency_result = None
+        if ENABLE_SELF_CONSISTENCY:
+            logger.info("── Node 1.5: Self-consistency check…")
+            try:
+                from nodes.self_consistency import check_self_consistency  # type: ignore[import-not-found]
+                consistency_result = await asyncio.to_thread(
+                    check_self_consistency, query, llm_output
+                )
+                logger.info(
+                    "── Node 1.5: consistency_score=%.3f  consistent=%s  high_risk=%s",
+                    consistency_result["consistency_score"],
+                    consistency_result["is_consistent"],
+                    consistency_result["is_high_risk"],
+                )
+            except Exception as e:
+                logger.warning("── Node 1.5: Self-consistency check failed (%s), proceeding.", e)
 
         # ── Node 2: Keyword Extraction ────────────────────────────────
         logger.info("── Node 2: Extracting search keywords…")
@@ -259,12 +281,14 @@ async def _handle_factual(query: str) -> GenerateResponse:
 
         # ── Node 5: Claim-Level Verification ─────────────────────────
         logger.info("── Node 5: Claim extraction + NLI verification…")
+        nli_alignment = bertscore.get("alignment_score", bertscore.get("f1", 0.0))
         hallu_report = await asyncio.to_thread(
             verify_claims,
             llm_output,
             rag_output,
             query,
             bertscore["f1"],
+            nli_alignment,
         )
         report_dict = hallu_report.to_dict()
 
@@ -275,6 +299,40 @@ async def _handle_factual(query: str) -> GenerateResponse:
             len(hallu_report.claim_verdicts),
         )
 
+        # ── Node 5.5: Knowledge Gap Recovery ──────────────────────────
+        # If there are UNVERIFIABLE claims, run a targeted search for
+        # the specific missing information before refinement.
+        unverifiable_claims = [
+            cv.claim for cv in hallu_report.claim_verdicts
+            if cv.verdict == "UNVERIFIABLE"
+        ]
+
+        enriched_rag = rag_output  # default: use original RAG output
+        if unverifiable_claims and hallu_report.hallucination_detected:
+            logger.info(
+                "── Node 5.5: %d unverifiable claim(s) — running gap recovery…",
+                len(unverifiable_claims),
+            )
+            try:
+                supplementary = await asyncio.to_thread(
+                    targeted_gap_search,
+                    unverifiable_claims,
+                    query,
+                )
+                if supplementary:
+                    enriched_rag = rag_output + "\n\n" + supplementary
+                    logger.info(
+                        "── Node 5.5: Enriched RAG context with %d chars of supplementary data.",
+                        len(supplementary),
+                    )
+                else:
+                    logger.info("── Node 5.5: No supplementary context found.")
+            except Exception as gap_exc:
+                logger.warning(
+                    "── Node 5.5: Gap recovery failed (%s), proceeding without.",
+                    gap_exc,
+                )
+
         # ── Node 6: Evidence-Based Refinement ────────────────────────
         final_answer = llm_output
 
@@ -284,7 +342,7 @@ async def _handle_factual(query: str) -> GenerateResponse:
                 refined = await asyncio.to_thread(
                     refine_with_evidence,
                     query,
-                    rag_output[:15000],
+                    enriched_rag[:15000],
                     report_dict,
                     "FACTUAL",
                 )
@@ -297,7 +355,7 @@ async def _handle_factual(query: str) -> GenerateResponse:
                     basic_refined = await asyncio.to_thread(
                         refine_response,
                         query,
-                        rag_output[:15000],
+                        enriched_rag[:15000],
                     )
                     if basic_refined:
                         final_answer = basic_refined
@@ -334,6 +392,7 @@ async def _handle_factual(query: str) -> GenerateResponse:
             hallucination_score=hallu_report.hallucination_score,
             hallucination_detected=hallu_report.hallucination_detected,
             hallucination_summary=hallu_report.summary,
+            verification_method=hallu_report.verification_method,
             final_answer=final_answer,
         )
 

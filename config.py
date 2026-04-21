@@ -24,7 +24,7 @@ GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 # ── Web Search ────────────────────────────────
 # Using googlesearch-python (no API key needed)
-SEARCH_MAX_RESULTS: int = int(os.getenv("SEARCH_MAX_RESULTS", "3"))
+SEARCH_MAX_RESULTS: int = int(os.getenv("SEARCH_MAX_RESULTS", "5"))
 
 # ── PageIndex / RAG ───────────────────────────
 # Directory for UUID-based temp markdown files (concurrent-safe)
@@ -37,6 +37,19 @@ def generate_md_path() -> str:
     md_dir.mkdir(parents=True, exist_ok=True)
     return str(md_dir / f"hallu_{uuid.uuid4().hex[:12]}.md")
 
+
+# ── NLI Model (DeBERTa-v3 trained on MNLI) ───
+NLI_MODEL_PATH: str = os.getenv(
+    "NLI_MODEL_PATH",
+    str(Path(__file__).resolve().parent / "models" / "nli-deberta-v3-mnli" / "final"),
+)
+NLI_DEVICE: str = os.getenv("NLI_DEVICE", "auto")  # auto, mps, cuda, cpu
+NLI_BATCH_SIZE: int = int(os.getenv("NLI_BATCH_SIZE", "16"))
+USE_NLI_MODEL: bool = os.getenv("USE_NLI_MODEL", "true").lower() in ("true", "1", "yes")
+
+# ── Self-Consistency Checking ─────────────────
+ENABLE_SELF_CONSISTENCY: bool = os.getenv("ENABLE_SELF_CONSISTENCY", "true").lower() in ("true", "1", "yes")
+N_CONSISTENCY_SAMPLES: int = int(os.getenv("N_CONSISTENCY_SAMPLES", "3"))
 
 # ── Hallucination Detection ──────────────────
 # Hallucination score threshold (0.0 = clean, 1.0 = fully hallucinated)

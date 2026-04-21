@@ -1,0 +1,14 @@
+{
+  "dataset": "HaluEval-QA",
+  "total_samples": 500,
+  "true_positive": 186,
+  "false_positive": 194,
+  "true_negative": 54,
+  "false_negative": 66,
+  "precision": 0.4895,
+  "recall": 0.7381,
+  "f1": 0.5886,
+  "accuracy": 0.48,
+  "elapsed_seconds": 13.9,
+  "ms_per_sample": 27.8
+}

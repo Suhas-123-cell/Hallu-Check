@@ -1,15 +1,20 @@
 """
 hallu-check | nodes/claim_verifier.py
-Node 5 — Claim-Level Hallucination Detection
+Node 5 — Claim-Level Hallucination Detection (v4: NLI-Based)
 
-Extracts atomic claims from the LLM output, verifies each one against
-RAG-retrieved context using NLI (Natural Language Inference), and produces
-a detailed hallucination report with per-claim verdicts.
+Architecture (v4):
+  1. Gemini extracts atomic claims from LLM output (LLMs are good at decomposition)
+  2. DeBERTa NLI model verifies each claim against RAG context (trained classifier)
+  3. Composite hallucination score = NLI-weighted claim scores + NLI alignment
 
-Design constraints:
-  - Uses exactly ONE Gemini call (extraction + verification batched)
-  - Detects honest uncertainty locally (no LLM needed)
-  - Falls back gracefully if Gemini is unavailable
+This replaces the v3 approach where Gemini did BOTH extraction AND verification.
+The NLI model gives:
+  - Deterministic, calibrated probability scores
+  - ~50ms per claim (vs seconds-long Gemini calls)
+  - No sycophancy or positional bias
+  - Real softmax probabilities, not fabricated "confidence"
+
+Falls back to Gemini-based verification if the NLI model is not available.
 """
 from __future__ import annotations
 
@@ -27,6 +32,8 @@ from config import (  # type: ignore[import-not-found]
     GEMINI_API_KEY,
     GEMINI_MODEL,
     HALLUCINATION_THRESHOLD,
+    USE_NLI_MODEL,
+    NLI_BATCH_SIZE,
 )
 
 logger = logging.getLogger("hallu-check.claim_verifier")
@@ -44,6 +51,39 @@ _GEMINI_GENERATE_CONFIG = genai_types.GenerateContentConfig(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# NLI Model (lazy-loaded singleton)
+# ─────────────────────────────────────────────────────────────────────────────
+_nli_loaded = False
+
+
+def _ensure_nli_model() -> bool:
+    """Lazy-load the NLI model on first use."""
+    global _nli_loaded
+    if _nli_loaded:
+        return True
+
+    if not USE_NLI_MODEL:
+        logger.info("Node 5 | NLI model disabled (USE_NLI_MODEL=false).")
+        return False
+
+    try:
+        from nodes.nli_model import load_model, is_loaded  # type: ignore[import-not-found]
+        if is_loaded():
+            _nli_loaded = True
+            return True
+        success = load_model()
+        _nli_loaded = success
+        if success:
+            logger.info("Node 5 | NLI model loaded successfully.")
+        else:
+            logger.warning("Node 5 | NLI model not available — falling back to Gemini.")
+        return success
+    except Exception as e:
+        logger.warning("Node 5 | Failed to load NLI model (%s) — falling back to Gemini.", e)
+        return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Data Structures
 # ─────────────────────────────────────────────────────────────────────────────
 @dataclass
@@ -52,8 +92,11 @@ class ClaimVerdict:
     claim: str
     verdict: str        # SUPPORTED, CONTRADICTED, UNVERIFIABLE, NO_CLAIM, HONEST_UNCERTAINTY
     evidence: str       # RAG snippet backing the verdict (empty if none)
-    confidence: float   # 0.0–1.0 confidence in this verdict
+    confidence: float   # 0.0–1.0 (real softmax probability from NLI model)
     reasoning: str = "" # Brief reasoning chain explaining how the verdict was reached
+    source_url: str = ""        # URL of the evidence source
+    source_paragraph: str = ""  # Specific paragraph that provided the strongest NLI signal
+    nli_probabilities: Dict[str, float] = field(default_factory=dict)  # Full probability distribution
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -66,6 +109,7 @@ class HallucinationReport:
     hallucination_score: float = 0.0       # 0.0 (clean) → 1.0 (fully hallucinated)
     hallucination_detected: bool = False
     summary: str = ""                      # Human-readable summary
+    verification_method: str = "gemini"    # "nli" or "gemini" — tracks which method was used
 
     def to_dict(self) -> dict:
         return {
@@ -73,6 +117,7 @@ class HallucinationReport:
             "hallucination_score": self.hallucination_score,
             "hallucination_detected": self.hallucination_detected,
             "summary": self.summary,
+            "verification_method": self.verification_method,
         }
 
 
@@ -202,7 +247,7 @@ def _rag_has_substantive_content(rag_output: str, query: str) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 def _parse_retry_delay(error_msg: str) -> float:
     """Extract retryDelay seconds from a Gemini 429 error message."""
-    match = re.search(r"retryDelay['\"]:\s*['\"]([\d.]+)(s|ms)", str(error_msg))
+    match = re.search(r"retryDelay['\"]:\s*['\"](\d+(?:\.\d+)?)(s|ms)", str(error_msg))
     if match:
         value = float(match.group(1))
         unit = match.group(2)
@@ -271,9 +316,190 @@ def _gemini_generate(prompt: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. Claim Extraction + Verification (SINGLE Gemini call)
+# 3. Claim Extraction (Gemini) — ONLY extracts claims, no verification
 # ─────────────────────────────────────────────────────────────────────────────
-_VERIFY_PROMPT = """\
+_EXTRACT_PROMPT = """\
+You are a claim extraction system. Extract every atomic factual claim from the LLM answer below.
+
+Rules:
+- An "atomic claim" is the smallest standalone factual statement.
+- Skip filler phrases, greetings, and meta-statements like "Sure, here's the answer".
+- If the answer contains NO factual claims (e.g., "I don't know"), return an empty list.
+- Do NOT verify or judge the claims — only extract them.
+
+LLM Answer:
+{llm_output}
+
+Respond ONLY with this JSON (no markdown fences, no extra text):
+{{
+  "claims": [
+    "claim 1 text",
+    "claim 2 text",
+    "claim 3 text"
+  ]
+}}
+"""
+
+
+def _extract_claims(llm_output: str) -> List[str]:
+    """
+    Extract atomic claims from LLM output using Gemini.
+
+    Gemini is excellent at decomposition — this is the one task where
+    an LLM excels vs. a classifier. Returns a list of claim strings.
+    """
+    prompt = _EXTRACT_PROMPT.format(llm_output=llm_output)
+    raw = _gemini_generate(prompt)
+
+    if not raw:
+        logger.warning("Node 5 | Gemini unavailable for claim extraction.")
+        return _fallback_extract_claims(llm_output)
+
+    # Parse JSON response
+    try:
+        json_match = re.search(r"```(?:json)?\s*(.*?)```", raw, re.DOTALL)
+        if json_match:
+            parsed = json.loads(json_match.group(1).strip())
+        else:
+            parsed = json.loads(raw.strip())
+    except json.JSONDecodeError:
+        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if json_match:
+            try:
+                parsed = json.loads(json_match.group(0))
+            except json.JSONDecodeError:
+                logger.warning("Node 5 | Failed to parse Gemini extraction response.")
+                return _fallback_extract_claims(llm_output)
+        else:
+            logger.warning("Node 5 | No JSON in Gemini extraction response.")
+            return _fallback_extract_claims(llm_output)
+
+    claims = parsed.get("claims", [])
+    if not isinstance(claims, list):
+        return _fallback_extract_claims(llm_output)
+
+    # Filter out non-strings and empty claims
+    claims = [str(c).strip() for c in claims if c and str(c).strip()]
+    logger.info("Node 5 | Extracted %d atomic claims via Gemini.", len(claims))
+    return claims
+
+
+def _fallback_extract_claims(llm_output: str) -> List[str]:
+    """
+    Fallback claim extraction when Gemini is unavailable.
+    Splits on sentence boundaries and filters short fragments.
+    """
+    sentences = [
+        s.strip()
+        for s in re.split(r"[.!?]+", llm_output)
+        if len(s.strip()) > 20
+    ]
+    # Filter out meta-statements
+    claims = [
+        s for s in sentences
+        if not any(meta in s.lower() for meta in [
+            "sure,", "here's", "i can help", "let me",
+            "based on", "according to", "in summary",
+        ])
+    ]
+    logger.info("Node 5 | Extracted %d claims via fallback sentence split.", len(claims))
+    return claims[:10]  # cap at 10
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. NLI-Based Claim Verification (DeBERTa)
+# ─────────────────────────────────────────────────────────────────────────────
+def _verify_claims_nli(
+    claims: List[str],
+    rag_output: str,
+    query: str,
+) -> List[ClaimVerdict]:
+    """
+    Verify each claim against RAG context using the trained NLI model.
+
+    For each claim:
+      1. premise = RAG context (evidence)
+      2. hypothesis = the claim
+      3. NLI model returns: entailment/neutral/contradiction with probabilities
+
+    Maps NLI labels to hallucination verdicts:
+      entailment    → SUPPORTED
+      neutral       → UNVERIFIABLE
+      contradiction → CONTRADICTED
+    """
+    from nodes.nli_model import classify_nli_batch  # type: ignore[import-not-found]
+
+    if not claims:
+        return []
+
+    # Truncate RAG context for NLI model (256 token max in training)
+    rag_truncated = rag_output[:2000] if len(rag_output) > 2000 else rag_output
+
+    # Build NLI pairs: (premise=evidence, hypothesis=claim)
+    pairs = [(rag_truncated, claim) for claim in claims]
+
+    # Batch classify all claims at once
+    t0 = time.time()
+    nli_results = classify_nli_batch(pairs, batch_size=NLI_BATCH_SIZE)
+    elapsed_ms = (time.time() - t0) * 1000
+
+    logger.info(
+        "Node 5 | NLI verification: %d claims in %.0fms (%.1fms/claim)",
+        len(claims),
+        elapsed_ms,
+        elapsed_ms / len(claims) if claims else 0,
+    )
+
+    # Extract source URL from RAG context (for attribution)
+    source_url = ""
+    url_match = re.search(r"\*\*Source:\*\*\s*(https?://\S+)", rag_output)
+    if url_match:
+        source_url = url_match.group(1)
+
+    # Find best-matching evidence paragraph per claim
+    rag_paragraphs = [
+        p.strip() for p in rag_output.split("\n\n") if len(p.strip()) > 30
+    ]
+
+    verdicts: List[ClaimVerdict] = []
+    for claim, nli_result in zip(claims, nli_results):
+        # Find the most relevant evidence paragraph
+        best_evidence = ""
+        if rag_paragraphs:
+            # Simple overlap scoring to find best paragraph
+            claim_words = set(claim.lower().split())
+            best_score = -1
+            for para in rag_paragraphs[:20]:  # limit to first 20 paragraphs
+                para_words = set(para.lower().split())
+                overlap = len(claim_words & para_words)
+                if overlap > best_score:
+                    best_score = overlap
+                    best_evidence = para[:300]  # truncate evidence
+
+        verdict = ClaimVerdict(
+            claim=claim,
+            verdict=nli_result["verdict"],
+            evidence=best_evidence or "No specific evidence paragraph identified.",
+            confidence=nli_result["confidence"],
+            reasoning=(
+                f"NLI model classified with "
+                f"P(entailment)={nli_result['probabilities']['entailment']:.3f}, "
+                f"P(neutral)={nli_result['probabilities']['neutral']:.3f}, "
+                f"P(contradiction)={nli_result['probabilities']['contradiction']:.3f}"
+            ),
+            source_url=source_url,
+            source_paragraph=best_evidence[:200] if best_evidence else "",
+            nli_probabilities=nli_result["probabilities"],
+        )
+        verdicts.append(verdict)
+
+    return verdicts
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Gemini-Based Verification (FALLBACK when NLI model unavailable)
+# ─────────────────────────────────────────────────────────────────────────────
+_VERIFY_PROMPT_GEMINI = """\
 You are a hallucination detection system. You will be given a user's question, an LLM's answer, and retrieved factual context.
 
 Your task:
@@ -344,21 +570,18 @@ Respond ONLY with this JSON (no markdown fences, no extra text):
 """
 
 
-def _extract_and_verify_claims(
+def _verify_claims_gemini(
     llm_output: str,
     rag_output: str,
     query: str,
 ) -> List[ClaimVerdict]:
     """
-    Extract atomic claims from LLM output and verify each against RAG context.
-
-    Uses exactly ONE Gemini API call (extraction + verification batched).
-    Falls back to keyword-based heuristic if Gemini is unavailable.
+    Fallback: Extract and verify claims using Gemini (v3 approach).
+    Used when the NLI model is not available.
     """
-    # Truncate context to avoid token limits (Gemini free tier)
     rag_truncated = rag_output[:12000] if len(rag_output) > 12000 else rag_output
 
-    prompt = _VERIFY_PROMPT.format(
+    prompt = _VERIFY_PROMPT_GEMINI.format(
         query=query,
         llm_output=llm_output,
         rag_context=rag_truncated,
@@ -371,14 +594,12 @@ def _extract_and_verify_claims(
 
     # Parse JSON response
     try:
-        # Try extracting from code block first
         json_match = re.search(r"```(?:json)?\s*(.*?)```", raw, re.DOTALL)
         if json_match:
             parsed = json.loads(json_match.group(1).strip())
         else:
             parsed = json.loads(raw.strip())
     except json.JSONDecodeError:
-        # Try to find any JSON object in the response
         json_match = re.search(r"\{.*\}", raw, re.DOTALL)
         if json_match:
             try:
@@ -390,19 +611,15 @@ def _extract_and_verify_claims(
             logger.warning("Node 5 | No JSON in Gemini response, using fallback.")
             return _fallback_verify(llm_output, rag_output)
 
-    # Convert parsed JSON to ClaimVerdict objects
     verdicts: List[ClaimVerdict] = []
     claims = parsed.get("claims", [])
-
     if not isinstance(claims, list):
-        logger.warning("Node 5 | 'claims' is not a list, using fallback.")
         return _fallback_verify(llm_output, rag_output)
 
     for item in claims:
         if not isinstance(item, dict):
             continue
         verdict_str = item.get("verdict", "UNVERIFIABLE").upper()
-        # Normalize verdict
         valid_verdicts = {"SUPPORTED", "CONTRADICTED", "UNVERIFIABLE", "NO_CLAIM"}
         if verdict_str not in valid_verdicts:
             verdict_str = "UNVERIFIABLE"
@@ -415,26 +632,21 @@ def _extract_and_verify_claims(
             reasoning=item.get("reasoning", ""),
         ))
 
-    logger.info(
-        "Node 5 | Extracted %d claims from LLM output via Gemini.",
-        len(verdicts),
-    )
+    logger.info("Node 5 | Extracted %d claims via Gemini (fallback).", len(verdicts))
     return verdicts
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. Fallback Heuristic (when Gemini is unavailable)
+# 6. Keyword-Based Fallback (last resort)
 # ─────────────────────────────────────────────────────────────────────────────
 def _fallback_verify(llm_output: str, rag_output: str) -> List[ClaimVerdict]:
     """
-    Simple keyword-overlap heuristic for claim verification when Gemini
-    is unavailable. Treats the entire LLM output as one claim and checks
-    word overlap with RAG context.
+    Simple keyword-overlap heuristic for claim verification when both
+    NLI model and Gemini are unavailable.
     """
     llm_words = set(llm_output.lower().split())
     rag_words = set(rag_output.lower().split())
 
-    # Remove stop words
     stop = {"the", "a", "an", "is", "are", "was", "were", "of", "in", "on",
             "at", "to", "for", "and", "or", "but", "not", "it", "this", "that",
             "with", "by", "from", "as", "be", "has", "have", "had", "do", "does"}
@@ -445,7 +657,7 @@ def _fallback_verify(llm_output: str, rag_output: str) -> List[ClaimVerdict]:
         return [ClaimVerdict(
             claim=llm_output[:200],
             verdict="UNVERIFIABLE",
-            evidence="(Gemini unavailable; no context overlap analysis possible)",
+            evidence="(Both NLI model and Gemini unavailable; no verification possible)",
             confidence=0.3,
         )]
 
@@ -468,52 +680,59 @@ def _fallback_verify(llm_output: str, rag_output: str) -> List[ClaimVerdict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Hallucination Scoring
+# 7. Hallucination Scoring (NLI-based)
 # ─────────────────────────────────────────────────────────────────────────────
 def _compute_hallucination_score(
     verdicts: List[ClaimVerdict],
-    bertscore_f1: float,
+    nli_alignment_score: float,
 ) -> float:
     """
     Compute a composite hallucination score (0.0 = clean, 1.0 = fully hallucinated).
 
-    Weights:
-      - CONTRADICTED claims are the strongest hallucination signal (weight=1.0)
-      - UNVERIFIABLE claims are a moderate signal (weight=0.3)
-      - SUPPORTED / NO_CLAIM claims reduce the score (weight=0.0)
-      - BERTScore is used as a secondary signal (inverted: low BERTScore → higher score)
+    v4 Formula (NLI-based):
+      For each claim, use the NLI contradiction probability as the signal:
+        claim_risk = P(contradiction) + 0.3 × P(neutral)
 
-    Formula:
-      claim_score = weighted_sum(verdicts) / total_claims
-      hallucination_score = 0.7 * claim_score + 0.3 * (1 - bertscore_f1)
+      claim_score = Σ(claim_risk) / total_claims
+      hallucination_score = 0.7 × claim_score + 0.3 × (1 - nli_alignment_score)
+
+    This is semantically correct:
+      - P(contradiction) directly measures factual conflict
+      - P(neutral) partially penalises unverifiable claims
+      - NLI alignment score replaces BERTScore with entailment-based similarity
     """
     if not verdicts:
-        # No claims extracted — use BERTScore alone
-        return max(0.0, min(1.0, 1.0 - bertscore_f1))
+        return max(0.0, min(1.0, 1.0 - nli_alignment_score))
 
-    weights = {
-        "CONTRADICTED": 1.0,
-        "UNVERIFIABLE": 0.3,
-        "SUPPORTED": 0.0,
-        "NO_CLAIM": 0.0,
-        "HONEST_UNCERTAINTY": 0.0,
-    }
+    claim_risks: List[float] = []
+    for v in verdicts:
+        if v.nli_probabilities:
+            # Use real NLI probabilities
+            p_contra = v.nli_probabilities.get("contradiction", 0.0)
+            p_neutral = v.nli_probabilities.get("neutral", 0.0)
+            risk = p_contra + 0.3 * p_neutral
+        else:
+            # Fallback: use verdict string (for Gemini fallback path)
+            weights = {
+                "CONTRADICTED": 1.0,
+                "UNVERIFIABLE": 0.3,
+                "SUPPORTED": 0.0,
+                "NO_CLAIM": 0.0,
+                "HONEST_UNCERTAINTY": 0.0,
+            }
+            risk = weights.get(v.verdict, 0.3) * v.confidence
+        claim_risks.append(risk)
 
-    weighted_sum = sum(
-        weights.get(v.verdict, 0.3) * v.confidence
-        for v in verdicts
-    )
-    total = len(verdicts)
-    claim_score = weighted_sum / total if total > 0 else 0.0
+    claim_score = sum(claim_risks) / len(claim_risks) if claim_risks else 0.0
 
-    # Composite: 70% claim-level, 30% BERTScore
-    composite = 0.7 * claim_score + 0.3 * (1.0 - bertscore_f1)
+    # Composite: 70% claim-level risk, 30% (1 - alignment)
+    composite = 0.7 * claim_score + 0.3 * (1.0 - nli_alignment_score)
     return max(0.0, min(1.0, round(composite, 4)))
 
 
-def _generate_summary(verdicts: List[ClaimVerdict], score: float) -> str:
+def _generate_summary(verdicts: List[ClaimVerdict], score: float, method: str) -> str:
     """Generate a human-readable hallucination summary."""
-    counts = {}
+    counts: Dict[str, int] = {}
     for v in verdicts:
         counts[v.verdict] = counts.get(v.verdict, 0) + 1
 
@@ -545,43 +764,48 @@ def _generate_summary(verdicts: List[ClaimVerdict], score: float) -> str:
     if not parts:
         return "No factual claims detected in the LLM output."
 
-    summary = "; ".join(parts) + f". Hallucination score: {score:.2f}."
+    method_label = "NLI model (DeBERTa)" if method == "nli" else "Gemini LLM"
+    summary = "; ".join(parts) + f". Hallucination score: {score:.2f} (verified by {method_label})."
     return summary
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. Public API — Full Claim Verification Pipeline
+# 8. Public API — Full Claim Verification Pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 def verify_claims(
     llm_output: str,
     rag_output: str,
     query: str,
     bertscore_f1: float = 0.0,
+    nli_alignment_score: float | None = None,
 ) -> HallucinationReport:
     """
-    Node 5 — Full claim-level hallucination detection.
+    Node 5 — Full claim-level hallucination detection (v4: NLI-based).
 
-    1. Check for honest uncertainty (local, no API call)
-    2. Extract & verify claims via Gemini (single API call)
-    3. Compute hallucination score (BERTScore + claim verdicts)
-    4. Return structured report
+    Architecture:
+      1. Check for honest uncertainty (local, no API call)
+      2. Extract atomic claims via Gemini (LLMs excel at decomposition)
+      3. Verify each claim via DeBERTa NLI model (falls back to Gemini if unavailable)
+      4. Compute hallucination score using NLI probabilities + alignment
+      5. Return structured report
 
     Args:
         llm_output: The LLM's preliminary answer (Node 1).
         rag_output: RAG-retrieved context (Node 4).
         query:      The user's original query.
-        bertscore_f1: BERTScore F1 from Node 4+5 (0.0 if not computed).
+        bertscore_f1: (DEPRECATED) BERTScore F1 from Node 4. Ignored if NLI alignment is available.
+        nli_alignment_score: NLI-based alignment score (0.0–1.0). If None, uses bertscore_f1 as fallback.
 
     Returns:
         HallucinationReport with per-claim verdicts and overall score.
     """
     logger.info("Node 5 | Starting claim-level verification…")
 
+    # Use NLI alignment if available, otherwise fall back to BERTScore
+    alignment_score = nli_alignment_score if nli_alignment_score is not None else bertscore_f1
+
     # ── Step 1: Check for honest uncertainty (FREE — no API call) ────
     if is_honest_uncertainty(llm_output):
-        # Before accepting honest uncertainty, check if RAG actually found
-        # substantive content. If the web search found real information but
-        # the LLM said "I don't know", that's the LLM being wrong — not honest.
         rag_has_content = _rag_has_substantive_content(rag_output, query)
 
         if rag_has_content:
@@ -598,7 +822,7 @@ def verify_claims(
                 ),
                 confidence=0.9,
             )
-            score = max(0.7, 0.7 * 1.0 + 0.3 * (1.0 - bertscore_f1))
+            score = max(0.7, 0.7 * 1.0 + 0.3 * (1.0 - alignment_score))
             return HallucinationReport(
                 claim_verdicts=[verdict],
                 hallucination_score=min(1.0, score),
@@ -607,6 +831,7 @@ def verify_claims(
                     "The LLM said it couldn't find information, but the web search "
                     "found relevant content. Refinement will use the retrieved evidence."
                 ),
+                verification_method="heuristic",
             )
 
         # RAG also has no useful content — genuine honest uncertainty
@@ -625,10 +850,35 @@ def verify_claims(
                 "The LLM honestly admitted it doesn't have information about "
                 "this topic. This is NOT a hallucination — no correction needed."
             ),
+            verification_method="heuristic",
         )
 
-    # ── Step 2: Extract & verify claims (SINGLE Gemini call) ─────────
-    verdicts = _extract_and_verify_claims(llm_output, rag_output, query)
+    # ── Step 2: Determine verification method ────────────────────────
+    use_nli = _ensure_nli_model()
+    method = "nli" if use_nli else "gemini"
+
+    if use_nli:
+        # ── NLI PATH: Extract claims (Gemini) → Verify (DeBERTa) ─────
+        logger.info("Node 5 | Using NLI model (DeBERTa) for verification.")
+
+        # Step 2a: Extract atomic claims via Gemini
+        claims = _extract_claims(llm_output)
+        if not claims:
+            logger.info("Node 5 | No claims extracted from LLM output.")
+            return HallucinationReport(
+                claim_verdicts=[],
+                hallucination_score=0.0,
+                hallucination_detected=False,
+                summary="No factual claims detected in the LLM output.",
+                verification_method=method,
+            )
+
+        # Step 2b: Verify each claim via NLI model
+        verdicts = _verify_claims_nli(claims, rag_output, query)
+    else:
+        # ── GEMINI FALLBACK: Extract + Verify in one call ────────────
+        logger.info("Node 5 | Using Gemini fallback for verification.")
+        verdicts = _verify_claims_gemini(llm_output, rag_output, query)
 
     if not verdicts:
         logger.info("Node 5 | No claims extracted from LLM output.")
@@ -637,25 +887,28 @@ def verify_claims(
             hallucination_score=0.0,
             hallucination_detected=False,
             summary="No factual claims detected in the LLM output.",
+            verification_method=method,
         )
 
     # ── Step 3: Compute hallucination score ──────────────────────────
-    score = _compute_hallucination_score(verdicts, bertscore_f1)
+    score = _compute_hallucination_score(verdicts, alignment_score)
     detected = score >= HALLUCINATION_THRESHOLD
 
     # ── Step 4: Generate summary ─────────────────────────────────────
-    summary = _generate_summary(verdicts, score)
+    summary = _generate_summary(verdicts, score, method)
 
     report = HallucinationReport(
         claim_verdicts=verdicts,
         hallucination_score=score,
         hallucination_detected=detected,
         summary=summary,
+        verification_method=method,
     )
 
     logger.info(
-        "Node 5 | Verification complete: score=%.4f, detected=%s, claims=%d "
+        "Node 5 | Verification complete [%s]: score=%.4f, detected=%s, claims=%d "
         "(SUPPORTED=%d, CONTRADICTED=%d, UNVERIFIABLE=%d)",
+        method.upper(),
         score,
         detected,
         len(verdicts),

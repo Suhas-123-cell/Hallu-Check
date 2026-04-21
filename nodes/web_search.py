@@ -122,8 +122,41 @@ def _wants_recent_info(query: str | None, keywords: List[str]) -> bool:
     return any(term in hay for term in freshness_terms)
 
 
-def _score_result_recency(title: str, url: str, snippet: str) -> int:
-    """Simple recency/domain relevance score for ranking web results."""
+def _wants_factual_origin(query: str | None, keywords: List[str]) -> bool:
+    """
+    Heuristic to detect if the user is asking about origins, inventions,
+    definitions, or historical facts — queries where Wikipedia excels.
+    """
+    hay = " ".join([(query or ""), *keywords]).lower()
+    origin_terms = [
+        "invented", "inventor", "invent",
+        "created", "creator", "create",
+        "founded", "founder", "found",
+        "discovered", "discoverer", "discover",
+        "origin", "history of", "etymology",
+        "what is", "what are", "what was",
+        "who invented", "who created", "who discovered",
+        "who founded", "who developed", "who proposed",
+        "when was", "where was",
+        "first proposed", "first used", "first introduced",
+        "algorithm", "technique", "method",
+        "definition", "concept",
+    ]
+    return any(term in hay for term in origin_terms)
+
+
+def _score_result_recency(
+    title: str, url: str, snippet: str,
+    prefer_recent: bool = False,
+    prefer_factual: bool = False,
+) -> int:
+    """Context-aware domain relevance score for ranking web results.
+
+    Scoring adapts based on query type:
+      - Recency queries: boost news/gov, penalize Wikipedia
+      - Factual/origin queries: boost Wikipedia + encyclopedic sources
+      - Neutral queries: no Wikipedia penalty or boost
+    """
     score = 0
     text = f"{title} {url} {snippet}".lower()
     year_now = datetime.now().year
@@ -131,9 +164,11 @@ def _score_result_recency(title: str, url: str, snippet: str) -> int:
         if str(yr) in text:
             score += max(1, 5 - (year_now - yr) * 2)
 
+    url_lower = url.lower()
+
     # Favor news/government domains for current-affairs style queries
     if any(
-        dom in url.lower()
+        dom in url_lower
         for dom in (
             "gov.in",
             "nic.in",
@@ -148,9 +183,25 @@ def _score_result_recency(title: str, url: str, snippet: str) -> int:
     ):
         score += 2
 
-    # Keep Wikipedia, but de-prioritize slightly for "latest" updates
-    if "wikipedia.org" in url.lower():
-        score -= 1
+    # Wikipedia scoring: context-dependent
+    if "wikipedia.org" in url_lower:
+        if prefer_factual:
+            score += 3   # Strong boost for factual/origin queries
+        elif prefer_recent:
+            score -= 1   # Slight penalty for recency queries
+        # else: neutral — no change
+
+    # Encyclopedic / academic sources also get a boost for factual queries
+    if prefer_factual and any(
+        dom in url_lower
+        for dom in (
+            "britannica.com",
+            "scholarpedia.org",
+            "stanford.edu",
+            "arxiv.org",
+        )
+    ):
+        score += 2
 
     return score
 
@@ -443,6 +494,7 @@ def _web_search(
       3. Final fallback: simplified query (first 3 words)
     """
     prefer_recent = _wants_recent_info(query, keywords)
+    prefer_factual = _wants_factual_origin(query, keywords)
     year_hint = str(datetime.now().year) if prefer_recent else ""
 
     # Build search queries to try in order of priority
@@ -467,12 +519,20 @@ def _web_search(
         search_queries.append(f"{name} linkedin")
         search_queries.append(f"{name} site:linkedin.com")
 
+    # Priority 4: For factual/origin queries, inject Wikipedia as a source
+    if prefer_factual and not prefer_recent:
+        kw_str = " ".join(keywords)
+        wiki_query = f"{kw_str} site:wikipedia.org"
+        if wiki_query not in search_queries:
+            search_queries.append(wiki_query)
+            logger.info("Node 3 | Injecting Wikipedia search for factual query.")
+
     scored_results: List[Tuple[int, str, str]] = []
     seen_urls: set[str] = set()
 
     for search_query in search_queries:
-        if len(scored_results) >= max_results:
-            break  # already got enough results
+        if len(scored_results) >= max_results * 2:
+            break  # collect more candidates, rank later
 
         logger.info("Node 3 | Web search: %r", search_query)
         try:
@@ -490,7 +550,11 @@ def _web_search(
                     logger.debug("Node 3 | Skipping unscrapable domain: %s", item_url)
                     continue
                 seen_urls.add(item_url)
-                score = _score_result_recency(title, item_url, snippet)
+                score = _score_result_recency(
+                    title, item_url, snippet,
+                    prefer_recent=prefer_recent,
+                    prefer_factual=prefer_factual,
+                )
                 scored_results.append((score, title, item_url))
 
             if scored_results:
@@ -508,7 +572,14 @@ def _web_search(
         for title, url in fallback_results:
             if _is_unscrapable_domain(url):
                 continue
-            scored_results.append((_score_result_recency(title, url, ""), title, url))
+            scored_results.append((
+                _score_result_recency(
+                    title, url, "",
+                    prefer_recent=prefer_recent,
+                    prefer_factual=prefer_factual,
+                ),
+                title, url,
+            ))
 
     scored_results.sort(key=lambda x: x[0], reverse=True)
     results = [(title, url) for _, title, url in scored_results[:max_results]]
@@ -1325,4 +1396,124 @@ def search_and_scrape(
         raise
 
     return md_path, markdown
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Knowledge Gap Recovery — Targeted Search for Unverifiable Claims
+# ─────────────────────────────────────────────────────────────────────────────
+def targeted_gap_search(
+    unverifiable_claims: List[str],
+    query: str,
+    max_results_per_claim: int = 3,
+) -> str:
+    """
+    Lightweight targeted search to fill knowledge gaps for unverifiable claims.
+
+    When Node 5 (claim verification) finds UNVERIFIABLE claims, this function
+    performs focused searches specifically for the missing information, then
+    returns supplementary context as a markdown string.
+
+    IMPORTANT: We search using the ORIGINAL USER QUERY, not the hallucinated
+    claims. The claims are from the LLM's wrong answer — using them as search
+    queries would just find more wrong information.
+
+    This is much lighter than a full search_and_scrape():
+      - No depth-2 crawling
+      - No C-RAG evaluation
+      - No PageIndex tree building
+      - Just quick DuckDuckGo search + scrape for the specific gaps
+
+    Args:
+        unverifiable_claims: List of claim strings that couldn't be verified.
+        query: The user's original query (for context).
+        max_results_per_claim: Max search results to fetch per search query.
+
+    Returns:
+        Supplementary context as a markdown string (may be empty if nothing found).
+    """
+    if not unverifiable_claims:
+        return ""
+
+    logger.info(
+        "Gap Recovery | Searching for %d unverifiable claim(s)…",
+        len(unverifiable_claims),
+    )
+
+    # Build smart search queries from the ORIGINAL QUERY, not the hallucinated claims
+    search_queries: List[str] = []
+
+    # Priority 1: The original user query (most likely to find the right answer)
+    clean_query = query.strip().rstrip("?!.")
+    search_queries.append(clean_query)
+
+    # Priority 2: Wikipedia-targeted search
+    search_queries.append(f"{clean_query} site:wikipedia.org")
+
+    # Priority 3: Add "origin" / "history" / "inventor" context if not already present
+    query_lower = clean_query.lower()
+    if any(t in query_lower for t in ["invented", "invent", "who", "creator", "origin"]):
+        # Query already has these terms — try an encyclopedic version
+        search_queries.append(f"{clean_query} encyclopedia")
+    else:
+        search_queries.append(f"{clean_query} origin history")
+
+    supplementary_parts: List[str] = [
+        "# Supplementary Context (Gap Recovery)\n\n"
+    ]
+    seen_urls: set[str] = set()
+    found_count = 0
+
+    for search_query in search_queries:
+        if found_count >= max_results_per_claim:
+            break
+
+        logger.info("Gap Recovery | Searching: %r", search_query[:100])
+
+        try:
+            hits = list(DDGS().text(
+                search_query,
+                max_results=max_results_per_claim * 2,
+            ))
+
+            for r in hits:
+                if found_count >= max_results_per_claim:
+                    break
+                title = r.get("title", "Untitled")
+                item_url = r.get("href", "")
+                if not item_url or item_url in seen_urls:
+                    continue
+                if _is_unscrapable_domain(item_url):
+                    continue
+                seen_urls.add(item_url)
+
+                # Quick scrape — short timeout, no mirror fallback
+                text = _scrape_url(item_url, timeout=10.0, use_mirror=False)
+                if not text or len(text.strip()) < 100:
+                    continue
+
+                # Truncate to keep context manageable
+                text = text[:4000]
+
+                supplementary_parts.append(f"## {title}\n\n")
+                supplementary_parts.append(f"**Source:** {item_url}\n\n")
+                supplementary_parts.append(textwrap.indent(text, "> "))
+                supplementary_parts.append("\n\n")
+                found_count += 1
+
+        except Exception as e:
+            logger.warning("Gap Recovery | Search failed for %r: %s", search_query[:60], e)
+
+        # Small delay between searches
+        time.sleep(random.uniform(0.3, 0.8))
+
+    if found_count == 0:
+        logger.info("Gap Recovery | No supplementary context found.")
+        return ""
+
+    result = "".join(supplementary_parts)
+    logger.info(
+        "Gap Recovery | Found %d supplementary source(s) (%d chars).",
+        found_count, len(result),
+    )
+    return result
 

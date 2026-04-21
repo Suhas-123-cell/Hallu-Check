@@ -46,7 +46,12 @@ tiktoken>=0.7.0
 # ── NLP Metrics ──────────────────────────────
 nltk>=3.8.1
 
-bert-score
+# ── NLI Model (DeBERTa-v3 trained on MNLI) ──
+# Replaces bert-score with proper NLI-based verification
+datasets>=2.19.0
+accelerate>=0.30.0
+evaluate>=0.4.0
+scikit-learn>=1.4.0
 
 # ── Utilities ────────────────────────────────
 aiofiles>=23.2.1

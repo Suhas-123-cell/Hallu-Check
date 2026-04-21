@@ -36,3 +36,4 @@ logs/*.json
 .claude/
 .pyre/
 .pyre_configuration
+models/
