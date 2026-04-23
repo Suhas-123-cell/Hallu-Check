@@ -39,92 +39,45 @@ Hallu-Check takes any natural-language query, generates an answer using a small 
 ## 🏗️ Architecture
 
 ```mermaid
-graph LR
-    subgraph ENTRY["🚪 Entry"]
-        Q["🧑 User Query"]
-    end
+flowchart TD
+    Q(["User Query"]) --> G{"Gatekeeper"}
 
-    subgraph ROUTING["🧭 Routing"]
-        N0{"Node 0\nGatekeeper"}
-    end
+    G -->|FACTUAL| LLM["Llama 3.2-1B Generator"]
+    G -->|REASONING| LLM
+    G -->|CHITCHAT| LLM
 
-    subgraph GENERATION["💡 Generation"]
-        N1["Node 1\nLlama 3.2-1B\nGenerator"]
-    end
+    LLM -->|chitchat| OUT(["Final Answer"])
 
-    subgraph ENHANCEMENT["🔬 Enhancement"]
-        SC["Self-Consistency\nMulti-temp NLI"]
-        RLM["RLM Reasoner\nDecompose → Solve → Compose"]
-    end
+    LLM -->|reasoning| RLM["RLM Reasoner"]
+    LLM -->|factual| SC["Self-Consistency Check"]
 
-    subgraph RETRIEVAL["🌐 Evidence Retrieval"]
-        N2["Keyword\nExtractor"]
-        N3["Web Search\nScrape + C-RAG"]
-        N4["PageIndex RAG\nTree Reasoning"]
-        N55["Gap Recovery\nTargeted Search"]
-    end
+    SC --> KW["Keyword Extractor"]
+    KW --> WS["Web Search + C-RAG"]
+    WS --> RAG["PageIndex RAG"]
+    RAG --> RLM
 
-    subgraph VERIFICATION["🔍 Verification"]
-        N5["Claim Verifier\nDeBERTa NLI"]
-    end
+    RLM --> NLI["Claim Verifier — DeBERTa NLI"]
+    RAG --> NLI
 
-    subgraph CORRECTION["✏️ Correction"]
-        N6["Refiner\nGemini 2.5 Flash"]
-    end
+    NLI -->|"clean"| OUT
+    NLI -->|"hallucinated"| REF["Refiner — Gemini 2.5 Flash"]
+    NLI -->|"unverifiable"| GAP["Gap Recovery Search"]
+    GAP --> REF
 
-    subgraph OUTPUT["✅ Output"]
-        OUT["Final\nAnswer"]
-    end
-
-    Q --> N0
-
-    N0 -->|"CHITCHAT 💬"| N1
-    N0 -->|"REASONING 🧠"| N1
-    N0 -->|"FACTUAL 📚"| N1
-
-    N1 -->|"chitchat\ndirect return"| OUT
-
-    N1 -->|"reasoning"| RLM
-    RLM --> N5
-
-    N1 -->|"factual"| SC
-    SC --> N2
-    N2 --> N3
-    N3 --> N4
-    N4 -.->|"shared tree"| RLM
-    N4 --> N5
-
-    N5 -->|"unverifiable\nclaims?"| N55
-    N55 -.->|"enriched context"| N6
-    N5 -->|"hallucination\ndetected?"| N6
-    N5 -->|"all claims\nsupported ✅"| OUT
-
-    N6 --> OUT
-
-    RLM -.->|"&lt;python&gt; tool"| PY["🐍 Sandboxed\nPython Exec"]
-    RLM -.->|"&lt;rag&gt; tool"| N4
-
-    style ENTRY fill:#1a1a2e,stroke:#16213e,color:#e94560
-    style ROUTING fill:#0f3460,stroke:#16213e,color:#e94560
-    style GENERATION fill:#533483,stroke:#16213e,color:#e0e0e0
-    style ENHANCEMENT fill:#2b2d42,stroke:#8d99ae,color:#edf2f4
-    style RETRIEVAL fill:#1b4332,stroke:#2d6a4f,color:#d8f3dc
-    style VERIFICATION fill:#7b2cbf,stroke:#5a189a,color:#e0aaff
-    style CORRECTION fill:#e36414,stroke:#fb8500,color:#fff
-    style OUTPUT fill:#006d77,stroke:#83c5be,color:#edf6f9
+    REF --> OUT
 ```
 
 ### Three Routes — One Shared Brain
 
-All routes share the same **Generator** (Llama 3.2-1B) and converge at the same **Claim Verifier** and **Refiner** — only the middle stages differ:
+All routes flow through the same **Generator**, and FACTUAL + REASONING converge at the same **Claim Verifier** and **Refiner** — only the middle stages differ:
 
 | Route | What Happens | When to Use |
 |-------|-------------|-------------|
-| 📚 **FACTUAL** | Full pipeline: search the web → build tree index → verify every claim against evidence → fix what's wrong | *"Who is the PM of India?"*, *"When was BPE invented?"* |
-| 🧠 **REASONING** | Skip the web entirely: decompose into sub-problems (RLM) → verify internal logic → refine if inconsistent | *"Write a binary search in Python"*, *"What is 17 × 23?"* |
-| 💬 **CHITCHAT** | Instant response — no verification needed | *"Hello!"*, *"How are you?"*, *"Thanks!"* |
+| 📚 **FACTUAL** | Full pipeline: search the web → build tree index → verify claims → fix what's wrong | *"Who is the PM of India?"*, *"When was BPE invented?"* |
+| 🧠 **REASONING** | Skip the web: decompose into sub-problems (RLM) → verify logic → refine | *"Write a binary search"*, *"What is 17 × 23?"* |
+| 💬 **CHITCHAT** | Instant response — no verification needed | *"Hello!"*, *"Thanks!"* |
 
-> **Why shared nodes matter:** The Claim Verifier (DeBERTa NLI) and Refiner (Gemini) are route-agnostic — they work the same way whether the evidence came from the web or from internal reasoning. This keeps the architecture clean and the codebase DRY.
+> **Why shared nodes matter:** The Claim Verifier (DeBERTa NLI) and Refiner (Gemini) are route-agnostic — they work the same way whether the evidence came from the web or from internal reasoning.
 
 ---
 
