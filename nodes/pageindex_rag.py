@@ -464,6 +464,10 @@ async def run_pageindex_rag_with_bertscore(
         Dict with 'rag_output' and 'bertscore' (precision, recall, f1,
         alignment_score, method).
     """
-    rag_output = await run_pageindex_rag(md_path, query)
+    tree = await build_tree_index(md_path)
+    rag_output = await tree_search_retrieve(tree, query)
     alignment = evaluate_alignment(llm_output, rag_output)
-    return {"rag_output": rag_output, "bertscore": alignment}
+    # `tree` is returned so callers (e.g. the RLM reasoner) can issue
+    # additional targeted sub-question queries against the same tree
+    # without paying to rebuild it. Existing callers can ignore this key.
+    return {"rag_output": rag_output, "bertscore": alignment, "tree": tree}

@@ -27,7 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware  # type: ignore[import-untype
 from pydantic import BaseModel, Field  # type: ignore[import-untyped, import-not-found]
 
 # ── Config ────────────────────────────────────────────────────────────────────
-from config import generate_md_path, ENABLE_SELF_CONSISTENCY  # type: ignore[import-not-found]
+from config import generate_md_path, ENABLE_SELF_CONSISTENCY, ENABLE_RLM_REASONING  # type: ignore[import-not-found]
 
 # ── Node imports ──────────────────────────────────────────────────────────────
 from nodes.gatekeeper import classify_query                   # type: ignore[import-not-found] # Node 0
@@ -36,6 +36,7 @@ from nodes.web_search import extract_keywords, search_and_scrape, targeted_gap_s
 from nodes.pageindex_rag import run_pageindex_rag_with_bertscore  # type: ignore[import-not-found] # Node 4+BERTScore
 from nodes.claim_verifier import verify_claims                 # type: ignore[import-not-found] # Node 5
 from nodes.refiner import refine_with_evidence, refine_response  # type: ignore[import-not-found] # Node 6
+from nodes.recursive_reasoner import recursive_reason  # type: ignore[import-not-found] # Node 1.5 (RLM)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -156,6 +157,18 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
     logger.info("── Node 1: Generating answer with LLM…")
     llm_output = await asyncio.to_thread(generate_llm_output, query)
 
+    # ── Node 1.5: Recursive Language Model reasoning (optional) ──────
+    # Decomposes the query into sub-questions, solves each in a fresh
+    # small context, then re-composes. Pure Llama — no extra paid cost.
+    reasoned_output = llm_output
+    if ENABLE_RLM_REASONING:
+        logger.info("── Node 1.5: Recursive reasoning (RLM)…")
+        try:
+            reasoned_output = await recursive_reason(query, llm_output)
+        except Exception as rlm_exc:
+            logger.warning("── Node 1.5: RLM failed (%s) — using Node 1 output.", rlm_exc)
+            reasoned_output = llm_output
+
     # ── Synthetic context for reasoning queries ──────────────────────
     rag_output = "No external context required for reasoning/logic queries."
     bertscore = {"precision": 0.5, "recall": 0.5, "f1": 0.5}
@@ -165,7 +178,7 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
     nli_alignment = bertscore.get("alignment_score", bertscore.get("f1", 0.5))
     hallu_report = await asyncio.to_thread(
         verify_claims,
-        llm_output,
+        reasoned_output,
         rag_output,
         query,
         bertscore["f1"],
@@ -180,8 +193,10 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
     )
 
     # ── Node 6: Refinement (only if hallucination detected) ──────────
-    final_answer = llm_output
+    final_answer = reasoned_output
     report_dict = hallu_report.to_dict()
+    # Ensure the refiner's REASONING prompt sees the RLM-composed answer
+    report_dict["original_output"] = reasoned_output
 
     if hallu_report.hallucination_detected:
         logger.info("── Node 6: Hallucination detected — refining…")
@@ -278,13 +293,38 @@ async def _handle_factual(query: str) -> GenerateResponse:
         eval_result = await run_pageindex_rag_with_bertscore(md_path, query, llm_output)
         rag_output = eval_result["rag_output"]
         bertscore = eval_result["bertscore"]
+        tree = eval_result.get("tree")  # for reuse by the RLM reasoner
+
+        # ── Node 4.5: RLM reasoning over the shared tree (optional) ─
+        # Decompose the query into sub-questions; each leaf can issue
+        # targeted <rag> queries against the SAME already-built tree and
+        # <python> blocks for computation. No web re-scrape, no Gemini,
+        # no extra paid cost — just additional free HF calls.
+        reasoned_output = llm_output
+        if ENABLE_RLM_REASONING and tree is not None:
+            logger.info("── Node 4.5: Recursive reasoning with RAG tool…")
+            from nodes.pageindex_rag import tree_search_retrieve  # type: ignore[import-not-found]
+
+            def _tree_query(sub_q: str) -> str:
+                """Sync wrapper so sync leaves (in worker threads) can query the tree."""
+                try:
+                    return asyncio.run(tree_search_retrieve(tree, sub_q))
+                except Exception as e:
+                    logger.warning("── Node 4.5: tree_query error (%s): %s", sub_q[:60], e)
+                    return ""
+
+            try:
+                reasoned_output = await recursive_reason(query, llm_output, _tree_query)
+            except Exception as rlm_exc:
+                logger.warning("── Node 4.5: RLM failed (%s) — using Node 1 output.", rlm_exc)
+                reasoned_output = llm_output
 
         # ── Node 5: Claim-Level Verification ─────────────────────────
         logger.info("── Node 5: Claim extraction + NLI verification…")
         nli_alignment = bertscore.get("alignment_score", bertscore.get("f1", 0.0))
         hallu_report = await asyncio.to_thread(
             verify_claims,
-            llm_output,
+            reasoned_output,
             rag_output,
             query,
             bertscore["f1"],
@@ -334,7 +374,7 @@ async def _handle_factual(query: str) -> GenerateResponse:
                 )
 
         # ── Node 6: Evidence-Based Refinement ────────────────────────
-        final_answer = llm_output
+        final_answer = reasoned_output
 
         if hallu_report.hallucination_detected:
             logger.info("── Node 6: Hallucination detected — refining with evidence…")

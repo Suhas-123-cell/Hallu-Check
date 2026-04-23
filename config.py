@@ -51,6 +51,10 @@ USE_NLI_MODEL: bool = os.getenv("USE_NLI_MODEL", "true").lower() in ("true", "1"
 ENABLE_SELF_CONSISTENCY: bool = os.getenv("ENABLE_SELF_CONSISTENCY", "true").lower() in ("true", "1", "yes")
 N_CONSISTENCY_SAMPLES: int = int(os.getenv("N_CONSISTENCY_SAMPLES", "3"))
 
+# ── Recursive Language Model (RLM) Reasoner ──
+# Llama self-recursion for REASONING queries — zero extra paid API cost.
+ENABLE_RLM_REASONING: bool = os.getenv("ENABLE_RLM_REASONING", "true").lower() in ("true", "1", "yes")
+
 # ── Hallucination Detection ──────────────────
 # Hallucination score threshold (0.0 = clean, 1.0 = fully hallucinated)
 # Scores ABOVE this trigger refinement
