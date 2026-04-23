@@ -295,29 +295,14 @@ async def _handle_factual(query: str) -> GenerateResponse:
         bertscore = eval_result["bertscore"]
         tree = eval_result.get("tree")  # for reuse by the RLM reasoner
 
-        # ── Node 4.5: RLM reasoning over the shared tree (optional) ─
-        # Decompose the query into sub-questions; each leaf can issue
-        # targeted <rag> queries against the SAME already-built tree and
-        # <python> blocks for computation. No web re-scrape, no Gemini,
-        # no extra paid cost — just additional free HF calls.
+        # ── Node 4.5: RLM reasoning (DISABLED on FACTUAL route) ──────
+        # RLM is designed for REASONING queries (math, logic, code) where
+        # the model needs to decompose multi-step problems. On FACTUAL
+        # queries, web search + RAG already provides the evidence, and the
+        # small Llama model tends to confuse acronyms during decomposition
+        # (e.g., BPE → BERT), making the output worse. RLM only runs on
+        # the REASONING route (see _handle_reasoning).
         reasoned_output = llm_output
-        if ENABLE_RLM_REASONING and tree is not None:
-            logger.info("── Node 4.5: Recursive reasoning with RAG tool…")
-            from nodes.pageindex_rag import tree_search_retrieve  # type: ignore[import-not-found]
-
-            def _tree_query(sub_q: str) -> str:
-                """Sync wrapper so sync leaves (in worker threads) can query the tree."""
-                try:
-                    return asyncio.run(tree_search_retrieve(tree, sub_q))
-                except Exception as e:
-                    logger.warning("── Node 4.5: tree_query error (%s): %s", sub_q[:60], e)
-                    return ""
-
-            try:
-                reasoned_output = await recursive_reason(query, llm_output, _tree_query)
-            except Exception as rlm_exc:
-                logger.warning("── Node 4.5: RLM failed (%s) — using Node 1 output.", rlm_exc)
-                reasoned_output = llm_output
 
         # ── Node 5: Claim-Level Verification ─────────────────────────
         logger.info("── Node 5: Claim extraction + NLI verification…")

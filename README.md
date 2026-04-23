@@ -49,15 +49,13 @@ flowchart TD
     LLM -->|chitchat| OUT(["Final Answer"])
 
     LLM -->|reasoning| RLM["RLM Reasoner"]
-    LLM -->|factual| SC["Self-Consistency Check"]
+    RLM --> NLI
 
+    LLM -->|factual| SC["Self-Consistency Check"]
     SC --> KW["Keyword Extractor"]
     KW --> WS["Web Search + C-RAG"]
     WS --> RAG["PageIndex RAG"]
-    RAG --> RLM
-
-    RLM --> NLI["Claim Verifier — DeBERTa NLI"]
-    RAG --> NLI
+    RAG --> NLI["Claim Verifier — DeBERTa NLI"]
 
     NLI -->|"clean"| OUT
     NLI -->|"hallucinated"| REF["Refiner — Gemini 2.5 Flash"]
@@ -73,11 +71,11 @@ All routes flow through the same **Generator**, and FACTUAL + REASONING converge
 
 | Route | What Happens | When to Use |
 |-------|-------------|-------------|
-| 📚 **FACTUAL** | Full pipeline: search the web → build tree index → verify claims → fix what's wrong | *"Who is the PM of India?"*, *"When was BPE invented?"* |
+| 📚 **FACTUAL** | Search the web → build tree index → verify every claim against evidence → fix what's wrong | *"Who is the PM of India?"*, *"When was BPE invented?"* |
 | 🧠 **REASONING** | Skip the web: decompose into sub-problems (RLM) → verify logic → refine | *"Write a binary search"*, *"What is 17 × 23?"* |
 | 💬 **CHITCHAT** | Instant response — no verification needed | *"Hello!"*, *"Thanks!"* |
 
-> **Why shared nodes matter:** The Claim Verifier (DeBERTa NLI) and Refiner (Gemini) are route-agnostic — they work the same way whether the evidence came from the web or from internal reasoning.
+> **Why RLM is REASONING-only:** The small Llama model tends to confuse acronyms during decomposition (e.g., BPE → BERT). For FACTUAL queries, web search + RAG already provides the evidence — decomposition adds noise. RLM shines on multi-step logic/math/code where there's no web evidence to rely on.
 
 ---
 

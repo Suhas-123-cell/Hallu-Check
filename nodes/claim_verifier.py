@@ -321,13 +321,20 @@ def _gemini_generate(prompt: str) -> str:
 _EXTRACT_PROMPT = """\
 You are a claim extraction system. Extract every atomic factual claim from the LLM answer below.
 
-Rules:
+CRITICAL RULES — you MUST follow these:
+- COPY claims using the SAME words as the original text. Do NOT rephrase or paraphrase.
+- Do NOT add any information that is not EXPLICITLY stated in the LLM answer.
+- Do NOT confuse similar-sounding terms (e.g., BPE ≠ BERT, BP ≠ BPE).
+- Every claim you output MUST be directly traceable to a sentence in the LLM answer.
 - An "atomic claim" is the smallest standalone factual statement.
 - Skip filler phrases, greetings, and meta-statements like "Sure, here's the answer".
 - If the answer contains NO factual claims (e.g., "I don't know"), return an empty list.
 - Do NOT verify or judge the claims — only extract them.
 
-LLM Answer:
+User's original question (for context only — do NOT extract claims from this):
+{query}
+
+LLM Answer (extract claims ONLY from this):
 {llm_output}
 
 Respond ONLY with this JSON (no markdown fences, no extra text):
@@ -341,46 +348,46 @@ Respond ONLY with this JSON (no markdown fences, no extra text):
 """
 
 
-def _extract_claims(llm_output: str) -> List[str]:
+def _extract_claims(llm_output: str, query: str = "") -> List[str]:
     """
-    Extract atomic claims from LLM output using Gemini.
+    Extract atomic claims from LLM output using local sentence splitting.
 
-    Gemini is excellent at decomposition — this is the one task where
-    an LLM excels vs. a classifier. Returns a list of claim strings.
+    Uses sentence-boundary detection to extract factual statements directly
+    from the LLM output — no LLM API call, zero hallucination risk.
+
+    Previously used Gemini for extraction, but Gemini itself could hallucinate
+    during extraction (e.g., confusing BPE → BERT), poisoning the entire
+    downstream verification pipeline. Local extraction is deterministic.
+
+    Args:
+        llm_output: The LLM's answer text.
+        query: The user's original query (unused, kept for interface compat).
     """
-    prompt = _EXTRACT_PROMPT.format(llm_output=llm_output)
-    raw = _gemini_generate(prompt)
+    if not llm_output or len(llm_output.strip()) < 10:
+        return []
 
-    if not raw:
-        logger.warning("Node 5 | Gemini unavailable for claim extraction.")
-        return _fallback_extract_claims(llm_output)
+    # Split on sentence boundaries
+    sentences = [
+        s.strip()
+        for s in re.split(r"[.!?]+", llm_output)
+        if len(s.strip()) > 20
+    ]
 
-    # Parse JSON response
-    try:
-        json_match = re.search(r"```(?:json)?\s*(.*?)```", raw, re.DOTALL)
-        if json_match:
-            parsed = json.loads(json_match.group(1).strip())
-        else:
-            parsed = json.loads(raw.strip())
-    except json.JSONDecodeError:
-        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if json_match:
-            try:
-                parsed = json.loads(json_match.group(0))
-            except json.JSONDecodeError:
-                logger.warning("Node 5 | Failed to parse Gemini extraction response.")
-                return _fallback_extract_claims(llm_output)
-        else:
-            logger.warning("Node 5 | No JSON in Gemini extraction response.")
-            return _fallback_extract_claims(llm_output)
+    # Filter out meta-statements (not factual claims)
+    meta_phrases = [
+        "sure,", "here's", "i can help", "let me",
+        "based on", "according to", "in summary",
+        "i hope", "feel free", "let me know",
+    ]
+    claims = [
+        s for s in sentences
+        if not any(meta in s.lower() for meta in meta_phrases)
+    ]
 
-    claims = parsed.get("claims", [])
-    if not isinstance(claims, list):
-        return _fallback_extract_claims(llm_output)
+    # Cap at 10 claims
+    claims = claims[:10]
 
-    # Filter out non-strings and empty claims
-    claims = [str(c).strip() for c in claims if c and str(c).strip()]
-    logger.info("Node 5 | Extracted %d atomic claims via Gemini.", len(claims))
+    logger.info("Node 5 | Extracted %d claims via local sentence split.", len(claims))
     return claims
 
 
@@ -404,6 +411,58 @@ def _fallback_extract_claims(llm_output: str) -> List[str]:
     ]
     logger.info("Node 5 | Extracted %d claims via fallback sentence split.", len(claims))
     return claims[:10]  # cap at 10
+
+
+def _validate_claims(claims: List[str], llm_output: str) -> List[str]:
+    """
+    Discard claims that Gemini fabricated during extraction.
+
+    Checks word overlap between each extracted claim and the original LLM
+    output. If a claim's content words don't appear in the LLM output,
+    it was hallucinated by the extraction model — discard it.
+
+    Args:
+        claims: List of claims extracted by Gemini.
+        llm_output: The original LLM answer text.
+
+    Returns:
+        Filtered list of claims that are actually grounded in the LLM output.
+    """
+    if not claims:
+        return []
+
+    llm_words = set(llm_output.lower().split())
+    stop_words = {
+        "the", "a", "an", "is", "are", "was", "were", "of", "in", "on",
+        "at", "to", "for", "and", "or", "but", "not", "it", "this", "that",
+        "with", "by", "from", "as", "be", "has", "have", "had", "do", "does",
+        "its", "their", "which", "who", "whom", "what", "where", "when",
+    }
+
+    validated: List[str] = []
+    for claim in claims:
+        claim_words = set(claim.lower().split())
+        claim_content = claim_words - stop_words
+        if not claim_content:
+            validated.append(claim)  # all stop words — keep it
+            continue
+
+        overlap = len(claim_content & llm_words) / len(claim_content)
+        if overlap >= 0.4:
+            validated.append(claim)
+        else:
+            logger.warning(
+                "Node 5 | Discarding fabricated claim (overlap=%.0f%%): '%s'",
+                overlap * 100,
+                claim[:80],
+            )
+
+    logger.info(
+        "Node 5 | Claim validation: %d/%d claims passed (grounded in LLM output).",
+        len(validated),
+        len(claims),
+    )
+    return validated
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -862,7 +921,7 @@ def verify_claims(
         logger.info("Node 5 | Using NLI model (DeBERTa) for verification.")
 
         # Step 2a: Extract atomic claims via Gemini
-        claims = _extract_claims(llm_output)
+        claims = _extract_claims(llm_output, query)
         if not claims:
             logger.info("Node 5 | No claims extracted from LLM output.")
             return HallucinationReport(
