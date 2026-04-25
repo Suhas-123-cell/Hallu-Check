@@ -301,3 +301,100 @@ def surgical_correct(
         corrections_made, corrections_failed,
     )
     return corrected
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Single-Claim Surgical Correction (standalone entry point)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SINGLE_CLAIM_PROMPT = """\
+You are given an answer, one specific wrong claim within it, and evidence.
+Replace ONLY that claim with a corrected version grounded in the evidence.
+Do not rewrite, restructure, or change any other part of the answer.
+Return the full answer with only that one claim changed.
+
+Original answer:
+{original_answer}
+
+Wrong claim:
+{wrong_claim}
+
+Evidence:
+{evidence}
+
+Corrected answer:"""
+
+
+def surgical_correct_single(
+    original_answer: str,
+    wrong_claim: str,
+    evidence: str,
+) -> str:
+    """
+    Replace exactly one wrong claim in an answer, preserving everything else.
+
+    Uses a single Gemini call with a focused prompt that instructs the model
+    to return the full answer with only the specified claim corrected,
+    grounded in the provided evidence.
+
+    Args:
+        original_answer: The full LLM-generated answer text.
+        wrong_claim:     The specific claim within the answer that is wrong.
+        evidence:        Factual evidence to ground the correction in.
+
+    Returns:
+        The full answer string with only that one claim corrected.
+        Returns the original answer unchanged if the correction fails.
+    """
+    if not original_answer or not wrong_claim:
+        return original_answer or ""
+
+    prompt = _SINGLE_CLAIM_PROMPT.format(
+        original_answer=original_answer,
+        wrong_claim=wrong_claim,
+        evidence=evidence[:4000] if evidence else "(no evidence provided)",
+    )
+
+    corrected = _gemini_generate_short(prompt)
+
+    # ── Validation ────────────────────────────────────────────────────
+    if not corrected or len(corrected.strip()) < 10:
+        logger.warning("Surgical | Single-claim correction returned empty, keeping original.")
+        return original_answer
+
+    # Strip markdown fences if Gemini wrapped the output
+    if corrected.startswith("```") and corrected.endswith("```"):
+        corrected = re.sub(r"^```\w*\n?", "", corrected)
+        corrected = re.sub(r"\n?```$", "", corrected)
+        corrected = corrected.strip()
+
+    # Sanity check: the corrected answer should still contain most of
+    # the original content (Gemini shouldn't have rewritten everything)
+    original_words = set(original_answer.lower().split())
+    corrected_words = set(corrected.lower().split())
+    if original_words:
+        preservation = len(original_words & corrected_words) / len(original_words)
+        if preservation < 0.5:
+            logger.warning(
+                "Surgical | Gemini rewrote too much (%.0f%% words preserved), "
+                "keeping original.",
+                preservation * 100,
+            )
+            return original_answer
+
+    # Sanity check: the wrong claim should NOT appear verbatim in the
+    # corrected output (it should have been replaced)
+    if wrong_claim in corrected:
+        logger.warning("Surgical | Wrong claim still present after correction, retrying locally.")
+        # Fall back to local replacement using _generate_replacement
+        replacement = _generate_replacement(wrong_claim, evidence, "")
+        if replacement:
+            local_match = _find_claim_in_text(wrong_claim, original_answer)
+            if local_match:
+                return original_answer.replace(local_match, replacement, 1)
+
+    logger.info(
+        "Surgical | Single-claim correction succeeded (%.0f%% preserved).",
+        preservation * 100 if original_words else 100,
+    )
+    return corrected
