@@ -40,6 +40,7 @@ _CODE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bwhile\s*\(.+\)\s*\{"),          # C/Java while loop
     re.compile(r"\bif\s*\(.+\)\s*\{"),             # C/Java if block
     re.compile(r"```\w*\n"),                       # Markdown code fence
+    re.compile(r"`[^`]+`"),                        # Inline code (backtick)
     re.compile(r"#include\s*<"),                   # C/C++ include
     re.compile(r"\bvoid\s+\w+\s*\("),              # C/Java void function
     re.compile(r"\bint\s+\w+\s*\("),               # C/Java int function
@@ -49,6 +50,28 @@ _CODE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bprint\s*\("),                   # print call
     re.compile(r"\bself\.\w+"),                    # Python self reference
     re.compile(r"\bnew\s+\w+\s*\("),               # new Object()
+    re.compile(r"\b[a-z]+_[a-z]+\("),              # snake_case function call
+    re.compile(r"\b\w+\.append\("),                # .append() method call
+    re.compile(r"\b\w+\.sort\("),                  # .sort() method call
+    re.compile(r"\b\w+\.pop\("),                   # .pop() method call
+    re.compile(r"\b\w+\.keys\("),                  # .keys() method call
+    re.compile(r"\blen\s*\("),                     # len() call
+    re.compile(r"\brange\s*\("),                   # range() call
+    re.compile(r"\b(?:True|False|None)\b"),         # Python literals
+    re.compile(r"\braise\s+\w+"),                  # raise Exception
+    re.compile(r"\btry\s*:"),                      # try block
+    re.compile(r"\bexcept\s+\w+"),                 # except clause
+    re.compile(r"\bassert\s+\w"),                  # assert statement
+    re.compile(r"\blambda\s+\w"),                  # lambda expression
+    re.compile(r"\[\s*\w+\s+for\s+\w+\s+in"),      # list comprehension
+    re.compile(r"\bdict\s*\("),                    # dict() call
+    re.compile(r"\blist\s*\("),                    # list() call
+    re.compile(r"\bset\s*\("),                     # set() call
+    re.compile(r"\btuple\s*\("),                   # tuple() call
+    re.compile(r"\b\w+\[\d+\]"),                   # array indexing: arr[0]
+    re.compile(r"\b\w+\[\s*:\s*\]"),                # slice: arr[:]
+    re.compile(r"\bTypeError\b|\bValueError\b|\bIndexError\b"),  # exception types
+    re.compile(r"\b(?:str|int|float|bool)\s*\("),  # type casting
 ]
 
 _CODE_KEYWORDS: list[str] = [
@@ -63,6 +86,22 @@ _CODE_KEYWORDS: list[str] = [
     "heap sort", "insertion sort", "selection sort",
     "null pointer", "segfault", "syntax error", "compiler",
     "API endpoint", "REST API", "HTTP request",
+    # Additional HumanEval-relevant patterns
+    "returns", "input", "output", "parameter", "argument",
+    "string", "substring", "character", "index",
+    "list", "dictionary", "tuple", "boolean",
+    "empty list", "empty string", "edge case",
+    "helper function", "utility function", "wrapper",
+    "data structure", "implementation", "method",
+    "exception", "error handling", "validation",
+    "variable", "constant", "global", "local",
+    "iterate", "traversal", "loop", "nested loop",
+    "base case", "recursive call", "memoization",
+    "palindrome", "anagram", "fibonacci", "prime",
+    "binary", "decimal", "hexadecimal", "bitwise",
+    "slice", "concatenate", "reverse", "flatten",
+    "filter", "map", "reduce", "lambda",
+    "type hint", "annotation", "docstring",
 ]
 
 # ── Math indicators ──────────────────────────────────────────────────────────
@@ -128,7 +167,10 @@ def _heuristic_classify(claim: str) -> ClaimType | None:
             logger.debug("claim_classifier | heuristic → math (pattern: %s)", pat.pattern[:30])
             return "math"
 
-    math_hits = sum(1 for kw in _MATH_KEYWORDS if kw in claim_lower)
+    math_hits = sum(
+        1 for kw in _MATH_KEYWORDS
+        if re.search(r'\b' + re.escape(kw) + r'\b', claim_lower)
+    )
     if math_hits >= 2:
         logger.debug("claim_classifier | heuristic → math (%d keyword hits)", math_hits)
         return "math"

@@ -259,7 +259,19 @@ def _parse_retry_delay(error_msg: str) -> float:
 
 
 def _gemini_generate(prompt: str) -> str:
-    """Call Gemini with rate-limit-aware retries. Returns raw text."""
+    """Call Gemini with rate-limit-aware retries. Returns raw text.
+
+    If ``_gemini_cache`` is not None (activated by ``enable_gemini_cache()``),
+    results are deduped via MD5 hash and persisted to a JSON file on disk.
+    """
+    # ── Cache lookup ──────────────────────────────────────────────────
+    if _gemini_cache is not None:
+        import hashlib
+        cache_key = hashlib.md5(prompt.encode()).hexdigest()
+        if cache_key in _gemini_cache:
+            logger.debug("Node 5 | Gemini cache HIT (key=%s…)", cache_key[:8])
+            return _gemini_cache[cache_key]
+
     if not GEMINI_API_KEY:
         raise EnvironmentError(
             "GEMINI_API_KEY is not set. Add it to your .env file.\n"
@@ -289,7 +301,14 @@ def _gemini_generate(prompt: str) -> str:
                 candidates = getattr(response, "candidates", [])
                 if candidates and hasattr(candidates[0], "text"):
                     content = candidates[0].text
-            return content.strip() if content else ""
+            result = content.strip() if content else ""
+
+            # ── Cache store ───────────────────────────────────────────
+            if _gemini_cache is not None and result:
+                _gemini_cache[cache_key] = result
+                _save_gemini_cache()
+
+            return result
         except Exception as e:
             error_str = str(e)
             is_rate_limit = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
@@ -316,6 +335,62 @@ def _gemini_generate(prompt: str) -> str:
             return ""
 
     return ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Gemini Response Cache (opt-in, disk-backed)
+# ─────────────────────────────────────────────────────────────────────────────
+_gemini_cache: Optional[Dict[str, str]] = None
+_gemini_cache_path: Optional[str] = None
+
+
+def enable_gemini_cache(cache_file: str = "gemini_cache.json") -> int:
+    """
+    Activate disk-backed Gemini response caching.
+
+    All subsequent ``_gemini_generate()`` calls will be deduped via MD5
+    hash. Existing cache entries are loaded from ``cache_file``.
+
+    Args:
+        cache_file: Path to the JSON cache file (created if missing).
+
+    Returns:
+        Number of entries loaded from the existing cache.
+    """
+    global _gemini_cache, _gemini_cache_path
+    import os
+
+    _gemini_cache_path = cache_file
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file) as f:
+                _gemini_cache = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            _gemini_cache = {}
+    else:
+        _gemini_cache = {}
+
+    n = len(_gemini_cache)
+    logger.info("Gemini cache enabled: %d entries loaded from %s", n, cache_file)
+    return n
+
+
+def disable_gemini_cache() -> None:
+    """Deactivate Gemini response caching."""
+    global _gemini_cache, _gemini_cache_path
+    _gemini_cache = None
+    _gemini_cache_path = None
+    logger.info("Gemini cache disabled.")
+
+
+def _save_gemini_cache() -> None:
+    """Persist the cache to disk (called after each new entry)."""
+    if _gemini_cache is not None and _gemini_cache_path:
+        try:
+            with open(_gemini_cache_path, "w") as f:
+                json.dump(_gemini_cache, f, indent=0)
+        except OSError as e:
+            logger.warning("Gemini cache save failed: %s", e)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
