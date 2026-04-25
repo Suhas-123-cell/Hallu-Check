@@ -51,7 +51,7 @@ def _truncate(text: str, max_len: int = 120) -> str:
 
 def print_header():
     print(f"\n{BOLD}{'═' * 64}")
-    print("  🔍 Hallu-Check v2.0 — Claim-Level Hallucination Detection")
+    print("  🔍 Hallu-Check v3.0 — Claim-Level Hallucination Detection")
     print(f"{'═' * 64}{RESET}")
     print(f"  {DIM}Type 'exit' or 'quit' to stop.{RESET}\n")
 

@@ -27,16 +27,24 @@ from fastapi.middleware.cors import CORSMiddleware  # type: ignore[import-untype
 from pydantic import BaseModel, Field  # type: ignore[import-untyped, import-not-found]
 
 # ── Config ────────────────────────────────────────────────────────────────────
-from config import generate_md_path, ENABLE_SELF_CONSISTENCY, ENABLE_RLM_REASONING  # type: ignore[import-not-found]
+from config import (  # type: ignore[import-not-found]
+    generate_md_path,
+    ENABLE_SELF_CONSISTENCY,
+    ENABLE_RLM_REASONING,
+    ENABLE_ICR,
+    ENABLE_EGV,
+)
 
 # ── Node imports ──────────────────────────────────────────────────────────────
-from nodes.gatekeeper import classify_query                   # type: ignore[import-not-found] # Node 0
+from nodes.gatekeeper import classify_query, classify_reasoning_subtype  # type: ignore[import-not-found] # Node 0
 from nodes.generator import generate_llm_output               # type: ignore[import-not-found] # Node 1
 from nodes.web_search import extract_keywords, search_and_scrape, targeted_gap_search  # type: ignore[import-not-found] # Nodes 2-3
 from nodes.pageindex_rag import run_pageindex_rag_with_bertscore  # type: ignore[import-not-found] # Node 4+BERTScore
 from nodes.claim_verifier import verify_claims                 # type: ignore[import-not-found] # Node 5
 from nodes.refiner import refine_with_evidence, refine_response  # type: ignore[import-not-found] # Node 6
 from nodes.recursive_reasoner import recursive_reason  # type: ignore[import-not-found] # Node 1.5 (RLM)
+from nodes.iterative_refiner import iterative_refine  # type: ignore[import-not-found] # ICR (Contribution 1)
+from nodes.execution_verifier import verify_code, verify_math, has_code, has_math  # type: ignore[import-not-found] # EGV (Contribution 2)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -148,18 +156,20 @@ async def _handle_chitchat(query: str) -> GenerateResponse:
 # ── REASONING handler ────────────────────────────────────────────────────────
 async def _handle_reasoning(query: str) -> GenerateResponse:
     """
-    Handle REASONING queries: Node 1 → Node 5 → Node 6.
-    Skips web search and PageIndex entirely.
+    Handle REASONING queries with sub-classification:
+      REASONING_CODE  → Node 1 → EGV (execution verification) → ICR
+      REASONING_MATH  → Node 1 → EGV (math verification) → ICR
+      REASONING_LOGIC → Node 1 → RLM → Node 5 (NLI) → ICR
     """
-    logger.info("── Route: REASONING → Node 1 → Node 5 → Node 6")
+    # Sub-classify the REASONING query
+    reasoning_subtype = await asyncio.to_thread(classify_reasoning_subtype, query)
+    logger.info("── Route: %s → specialized pipeline", reasoning_subtype)
 
     # ── Node 1: LLM Generator ────────────────────────────────────────
     logger.info("── Node 1: Generating answer with LLM…")
     llm_output = await asyncio.to_thread(generate_llm_output, query)
 
     # ── Node 1.5: Recursive Language Model reasoning (optional) ──────
-    # Decomposes the query into sub-questions, solves each in a fresh
-    # small context, then re-composes. Pure Llama — no extra paid cost.
     reasoned_output = llm_output
     if ENABLE_RLM_REASONING:
         logger.info("── Node 1.5: Recursive reasoning (RLM)…")
@@ -173,8 +183,36 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
     rag_output = "No external context required for reasoning/logic queries."
     bertscore = {"precision": 0.5, "recall": 0.5, "f1": 0.5}
 
-    # ── Node 5: Claim Verification (internal logic check) ────────────
-    logger.info("── Node 5: Internal claim verification (no RAG context)…")
+    # ── EGV: Execution-Grounded Verification (for CODE/MATH) ─────────
+    execution_verdict = None
+    if ENABLE_EGV and reasoning_subtype in ("REASONING_CODE", "REASONING_MATH"):
+        logger.info("── EGV: Execution-based verification (%s)…", reasoning_subtype)
+        try:
+            if reasoning_subtype == "REASONING_CODE" and has_code(reasoned_output):
+                execution_verdict = await asyncio.to_thread(
+                    verify_code, reasoned_output, query
+                )
+                logger.info(
+                    "── EGV: Code verdict=%s score=%.2f (%d/%d tests passed)",
+                    execution_verdict.verdict,
+                    execution_verdict.score,
+                    execution_verdict.passed_tests,
+                    execution_verdict.total_tests,
+                )
+            elif reasoning_subtype == "REASONING_MATH" and has_math(reasoned_output):
+                execution_verdict = await asyncio.to_thread(
+                    verify_math, reasoned_output, query
+                )
+                logger.info(
+                    "── EGV: Math verdict=%s score=%.2f",
+                    execution_verdict.verdict,
+                    execution_verdict.score,
+                )
+        except Exception as egv_exc:
+            logger.warning("── EGV: Execution verification failed (%s).", egv_exc)
+
+    # ── Node 5: Claim Verification ───────────────────────────────────
+    logger.info("── Node 5: Claim verification…")
     nli_alignment = bertscore.get("alignment_score", bertscore.get("f1", 0.5))
     hallu_report = await asyncio.to_thread(
         verify_claims,
@@ -185,6 +223,24 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
         nli_alignment,
     )
 
+    # If EGV found failures, boost the hallucination score
+    if execution_verdict and execution_verdict.verdict == "FAIL":
+        # Execution failures are more reliable than NLI for code/math
+        egv_penalty = (1.0 - execution_verdict.score) * 0.7
+        original_score = hallu_report.hallucination_score
+        hallu_report.hallucination_score = min(
+            1.0, max(hallu_report.hallucination_score, egv_penalty)
+        )
+        hallu_report.hallucination_detected = True
+        hallu_report.summary += (
+            f" Execution verification: {execution_verdict.failed_tests}/"
+            f"{execution_verdict.total_tests} tests failed."
+        )
+        logger.info(
+            "── EGV: Boosted hallucination score %.4f → %.4f (EGV penalty=%.4f)",
+            original_score, hallu_report.hallucination_score, egv_penalty,
+        )
+
     logger.info(
         "── Node 5: hallucination_score=%.4f  detected=%s  claims=%d",
         hallu_report.hallucination_score,
@@ -192,26 +248,52 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
         len(hallu_report.claim_verdicts),
     )
 
-    # ── Node 6: Refinement (only if hallucination detected) ──────────
+    # ── Node 6: ICR (Iterative Convergent Refinement) ────────────────
     final_answer = reasoned_output
     report_dict = hallu_report.to_dict()
-    # Ensure the refiner's REASONING prompt sees the RLM-composed answer
     report_dict["original_output"] = reasoned_output
 
     if hallu_report.hallucination_detected:
-        logger.info("── Node 6: Hallucination detected — refining…")
-        try:
-            refined = await asyncio.to_thread(
-                refine_with_evidence,
-                query,
-                rag_output,
-                report_dict,
-                "REASONING",
-            )
-            if refined:
-                final_answer = refined
-        except Exception as refine_exc:
-            logger.warning("── Node 6: Refinement failed (%s).", refine_exc)
+        logger.info("── Node 6: Hallucination detected — starting ICR…")
+        if ENABLE_ICR:
+            try:
+                icr_result = await asyncio.to_thread(
+                    iterative_refine,
+                    query,
+                    reasoned_output,
+                    rag_output,
+                    hallu_report,
+                    "REASONING",
+                )
+                if icr_result.final_answer:
+                    final_answer = icr_result.final_answer
+                    logger.info(
+                        "── ICR: %s after %d rounds (%.4f → %.4f)",
+                        "Converged" if icr_result.converged else "Stopped",
+                        icr_result.total_rounds,
+                        icr_result.initial_score,
+                        icr_result.final_score,
+                    )
+            except Exception as icr_exc:
+                logger.warning("── ICR failed (%s), trying one-shot refine.", icr_exc)
+                try:
+                    refined = await asyncio.to_thread(
+                        refine_with_evidence, query, rag_output, report_dict, "REASONING",
+                    )
+                    if refined:
+                        final_answer = refined
+                except Exception as refine_exc:
+                    logger.warning("── One-shot refine also failed (%s).", refine_exc)
+        else:
+            # ICR disabled — use original one-shot refiner
+            try:
+                refined = await asyncio.to_thread(
+                    refine_with_evidence, query, rag_output, report_dict, "REASONING",
+                )
+                if refined:
+                    final_answer = refined
+            except Exception as refine_exc:
+                logger.warning("── Node 6: Refinement failed (%s).", refine_exc)
     else:
         logger.info("── Node 6: No hallucination — keeping original answer.")
 
@@ -358,36 +440,71 @@ async def _handle_factual(query: str) -> GenerateResponse:
                     gap_exc,
                 )
 
-        # ── Node 6: Evidence-Based Refinement ────────────────────────
+        # ── Node 6: ICR (Iterative Convergent Refinement) ────────────
         final_answer = reasoned_output
 
         if hallu_report.hallucination_detected:
-            logger.info("── Node 6: Hallucination detected — refining with evidence…")
-            try:
-                refined = await asyncio.to_thread(
-                    refine_with_evidence,
-                    query,
-                    enriched_rag[:15000],
-                    report_dict,
-                    "FACTUAL",
-                )
-                if refined:
-                    final_answer = refined
-                else:
-                    logger.warning(
-                        "── Node 6: Evidence-based refinement empty. Trying basic…"
+            logger.info("── Node 6: Hallucination detected — starting ICR…")
+            if ENABLE_ICR:
+                try:
+                    icr_result = await asyncio.to_thread(
+                        iterative_refine,
+                        query,
+                        reasoned_output,
+                        enriched_rag[:15000],
+                        hallu_report,
+                        "FACTUAL",
                     )
-                    basic_refined = await asyncio.to_thread(
-                        refine_response,
+                    if icr_result.final_answer:
+                        final_answer = icr_result.final_answer
+                        logger.info(
+                            "── ICR: %s after %d rounds (%.4f → %.4f)",
+                            "Converged" if icr_result.converged else "Stopped",
+                            icr_result.total_rounds,
+                            icr_result.initial_score,
+                            icr_result.final_score,
+                        )
+                except Exception as icr_exc:
+                    logger.warning("── ICR failed (%s), trying one-shot refine.", icr_exc)
+                    try:
+                        refined = await asyncio.to_thread(
+                            refine_with_evidence,
+                            query,
+                            enriched_rag[:15000],
+                            report_dict,
+                            "FACTUAL",
+                        )
+                        if refined:
+                            final_answer = refined
+                    except Exception as refine_exc:
+                        logger.warning("── One-shot refine also failed (%s).", refine_exc)
+            else:
+                # ICR disabled — use original one-shot refiner
+                try:
+                    refined = await asyncio.to_thread(
+                        refine_with_evidence,
                         query,
                         enriched_rag[:15000],
+                        report_dict,
+                        "FACTUAL",
                     )
-                    if basic_refined:
-                        final_answer = basic_refined
-            except Exception as refine_exc:
-                logger.warning(
-                    "── Node 6: Refinement failed (%s). Using original.", refine_exc,
-                )
+                    if refined:
+                        final_answer = refined
+                    else:
+                        logger.warning(
+                            "── Node 6: Evidence-based refinement empty. Trying basic…"
+                        )
+                        basic_refined = await asyncio.to_thread(
+                            refine_response,
+                            query,
+                            enriched_rag[:15000],
+                        )
+                        if basic_refined:
+                            final_answer = basic_refined
+                except Exception as refine_exc:
+                    logger.warning(
+                        "── Node 6: Refinement failed (%s). Using original.", refine_exc,
+                    )
         else:
             logger.info("── Node 6: No hallucination — keeping original answer.")
 

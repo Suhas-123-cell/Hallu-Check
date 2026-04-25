@@ -60,3 +60,18 @@ ENABLE_RLM_REASONING: bool = os.getenv("ENABLE_RLM_REASONING", "true").lower() i
 # Scores ABOVE this trigger refinement
 HALLUCINATION_THRESHOLD: float = float(os.getenv("HALLUCINATION_THRESHOLD", "0.3"))
 
+# ── Iterative Convergent Refinement (ICR) ─────
+# Multi-round verify→refine loop until hallucination score converges.
+ENABLE_ICR: bool = os.getenv("ENABLE_ICR", "true").lower() in ("true", "1", "yes")
+ICR_MAX_ROUNDS: int = int(os.getenv("ICR_MAX_ROUNDS", "3"))
+ICR_CONVERGENCE_EPSILON: float = float(os.getenv("ICR_CONVERGENCE_EPSILON", "0.05"))
+
+# ── Execution-Grounded Verification (EGV) ─────
+# For REASONING queries: verify code/math via execution instead of NLI.
+ENABLE_EGV: bool = os.getenv("ENABLE_EGV", "true").lower() in ("true", "1", "yes")
+EGV_TIMEOUT: int = int(os.getenv("EGV_TIMEOUT", "10"))  # seconds per execution
+
+# ── Surgical Correction ──────────────────────
+# Replace only CONTRADICTED claims instead of rewriting the full answer.
+ENABLE_SURGICAL_CORRECTION: bool = os.getenv("ENABLE_SURGICAL_CORRECTION", "true").lower() in ("true", "1", "yes")
+

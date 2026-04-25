@@ -350,14 +350,18 @@ Respond ONLY with this JSON (no markdown fences, no extra text):
 
 def _extract_claims(llm_output: str, query: str = "") -> List[str]:
     """
-    Extract atomic claims from LLM output using local sentence splitting.
+    Extract atomic claims from LLM output using NLTK sentence tokenization.
 
-    Uses sentence-boundary detection to extract factual statements directly
-    from the LLM output — no LLM API call, zero hallucination risk.
+    Uses proper sentence-boundary detection to extract factual statements
+    directly from the LLM output — no LLM API call, zero hallucination risk.
 
-    Previously used Gemini for extraction, but Gemini itself could hallucinate
-    during extraction (e.g., confusing BPE → BERT), poisoning the entire
-    downstream verification pipeline. Local extraction is deterministic.
+    Previously used regex splitting on [.!?] which broke on abbreviations
+    ("U.S.", "Dr.", "e.g.") and created phantom sentence fragments that
+    weren't in the original text. NLTK sent_tokenize handles these correctly.
+
+    After extraction, _validate_claims() checks that every extracted claim
+    is actually grounded in the original LLM output (word overlap ≥ 60%).
+    This catches any fragments that get corrupted during splitting.
 
     Args:
         llm_output: The LLM's answer text.
@@ -366,11 +370,20 @@ def _extract_claims(llm_output: str, query: str = "") -> List[str]:
     if not llm_output or len(llm_output.strip()) < 10:
         return []
 
-    # Split on sentence boundaries
+    # Use NLTK sent_tokenize for robust sentence boundary detection.
+    # Falls back to regex if NLTK data is not available.
+    try:
+        from nltk.tokenize import sent_tokenize  # type: ignore[import-untyped]
+        sentences = sent_tokenize(llm_output)
+    except Exception:
+        # Fallback: split on sentence-ending punctuation followed by space+uppercase
+        sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z])', llm_output)
+
+    # Filter: keep only sentences with meaningful content (≥5 words)
     sentences = [
         s.strip()
-        for s in re.split(r"[.!?]+", llm_output)
-        if len(s.strip()) > 20
+        for s in sentences
+        if len(s.strip()) > 20 and len(s.strip().split()) >= 5
     ]
 
     # Filter out meta-statements (not factual claims)
@@ -387,7 +400,10 @@ def _extract_claims(llm_output: str, query: str = "") -> List[str]:
     # Cap at 10 claims
     claims = claims[:10]
 
-    logger.info("Node 5 | Extracted %d claims via local sentence split.", len(claims))
+    # Validate: discard any claims not grounded in the original LLM output
+    claims = _validate_claims(claims, llm_output)
+
+    logger.info("Node 5 | Extracted %d validated claims via NLTK sentence split.", len(claims))
     return claims
 
 
@@ -448,7 +464,7 @@ def _validate_claims(claims: List[str], llm_output: str) -> List[str]:
             continue
 
         overlap = len(claim_content & llm_words) / len(claim_content)
-        if overlap >= 0.4:
+        if overlap >= 0.6:
             validated.append(claim)
         else:
             logger.warning(
@@ -917,10 +933,10 @@ def verify_claims(
     method = "nli" if use_nli else "gemini"
 
     if use_nli:
-        # ── NLI PATH: Extract claims (Gemini) → Verify (DeBERTa) ─────
+        # ── NLI PATH: Extract claims (local) → Verify (DeBERTa) ─────
         logger.info("Node 5 | Using NLI model (DeBERTa) for verification.")
 
-        # Step 2a: Extract atomic claims via Gemini
+        # Step 2a: Extract atomic claims (local sentence splitting + validation)
         claims = _extract_claims(llm_output, query)
         if not claims:
             logger.info("Node 5 | No claims extracted from LLM output.")

@@ -290,3 +290,74 @@ def _parse_classification(raw: str) -> Dict[str, object]:
     logger.warning("Node 0 | Could not parse classification, defaulting to FACTUAL.")
     return {"category": "FACTUAL", "confidence": 0.0}
 
+
+# ── REASONING sub-classification ─────────────────────────────────────────────
+# When a query is classified as REASONING, we further distinguish:
+#   REASONING_CODE → triggers execution-based verification (EGV)
+#   REASONING_MATH → triggers symbolic/numeric verification
+#   REASONING_LOGIC → uses existing NLI + RLM approach
+
+_CODE_SUBTYPE_KEYWORDS = [
+    "write a function", "write a program", "write code", "implement",
+    "def ", "class ", "function", "code", "script", "program",
+    "leetcode", "hackerrank", "codeforces", "binary search",
+    "sort", "array", "linked list", "tree", "graph",
+    "refactor", "debug", "fix this code", "optimize",
+    "python", "java", "c++", "javascript", "rust", "golang",
+]
+
+_MATH_SUBTYPE_KEYWORDS = [
+    "calculate", "compute", "evaluate", "what is",
+    "solve", "equation", "formula", "derivative", "integral",
+    "factorial", "fibonacci", "prime", "sum of", "product of",
+    "how many", "how much", "probability", "percentage",
+    "2^", "3^", "10^", "√", "sqrt",
+]
+
+# Regex patterns for math expressions
+_MATH_EXPR_PATTERNS = [
+    r"\d+\s*[+\-*/^%]\s*\d+",       # e.g., "5 * 3"
+    r"\d+\s*\*\*\s*\d+",             # e.g., "2 ** 10"
+    r"\d+!",                          # e.g., "5!"
+    r"(?:sqrt|log|sin|cos)\s*\(",    # math functions
+]
+
+
+def classify_reasoning_subtype(query: str) -> str:
+    """
+    Sub-classify a REASONING query into CODE, MATH, or LOGIC.
+
+    Args:
+        query: The user's query (already classified as REASONING).
+
+    Returns:
+        One of: "REASONING_CODE", "REASONING_MATH", "REASONING_LOGIC"
+    """
+    query_lower = query.lower()
+
+    # Check for code patterns (highest priority — code often contains math)
+    for pattern in _CODE_PATTERNS:
+        if re.search(pattern, query, re.MULTILINE):
+            logger.info("Node 0 | REASONING subtype: CODE (code pattern)")
+            return "REASONING_CODE"
+
+    code_hits = sum(1 for kw in _CODE_SUBTYPE_KEYWORDS if kw in query_lower)
+    if code_hits >= 2:
+        logger.info("Node 0 | REASONING subtype: CODE (%d keyword hits)", code_hits)
+        return "REASONING_CODE"
+
+    # Check for math patterns
+    for pattern in _MATH_EXPR_PATTERNS:
+        if re.search(pattern, query):
+            logger.info("Node 0 | REASONING subtype: MATH (expression pattern)")
+            return "REASONING_MATH"
+
+    math_hits = sum(1 for kw in _MATH_SUBTYPE_KEYWORDS if kw in query_lower)
+    if math_hits >= 2:
+        logger.info("Node 0 | REASONING subtype: MATH (%d keyword hits)", math_hits)
+        return "REASONING_MATH"
+
+    # Default: LOGIC (general reasoning, no code or math)
+    logger.info("Node 0 | REASONING subtype: LOGIC (default)")
+    return "REASONING_LOGIC"
+
