@@ -374,7 +374,7 @@ Query: "What is 17 × 23 + the population of France in millions?"
 | Samples | 200 |
 | Misconceptions Detected | 197 / 200 |
 | **Detection Rate** | **98.5%** |
-| Speed | 41.8ms / sample |
+| Speed | 0.041s / sample |
 
 ### HaluEval-QA
 | Metric | Value |
@@ -384,7 +384,7 @@ Query: "What is 17 × 23 + the population of France in millions?"
 | **Recall** | **73.8%** |
 | **F1** | **58.9%** |
 | Accuracy | 48.0% |
-| Speed | 27.8ms / sample |
+| Speed | 0.027s / sample |
 
 > **Note:** HaluEval precision is lower because the NLI model aggressively flags uncertain claims as non-supported — a conservative design choice that prioritises catching hallucinations over avoiding false alarms.
 
