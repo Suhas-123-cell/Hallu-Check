@@ -34,6 +34,8 @@ from config import (  # type: ignore[import-not-found]
     HALLUCINATION_THRESHOLD,
     USE_NLI_MODEL,
     NLI_BATCH_SIZE,
+    ENABLE_EGV,
+    ENABLE_SURGICAL_CORRECTION,
 )
 
 logger = logging.getLogger("hallu-check.claim_verifier")
@@ -97,6 +99,7 @@ class ClaimVerdict:
     source_url: str = ""        # URL of the evidence source
     source_paragraph: str = ""  # Specific paragraph that provided the strongest NLI signal
     nli_probabilities: Dict[str, float] = field(default_factory=dict)  # Full probability distribution
+    verification_method: str = "NLI"  # "NLI", "EGV_CODE", "EGV_MATH" — per-claim verifier used
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -839,7 +842,14 @@ def _generate_summary(verdicts: List[ClaimVerdict], score: float, method: str) -
     if not parts:
         return "No factual claims detected in the LLM output."
 
-    method_label = "NLI model (DeBERTa)" if method == "nli" else "Gemini LLM"
+    method_labels = {
+        "nli": "NLI model (DeBERTa)",
+        "gemini": "Gemini LLM",
+        "mixed": "NLI + Execution-Grounded Verification",
+        "EGV_CODE": "Code execution verification",
+        "EGV_MATH": "SymPy math verification",
+    }
+    method_label = method_labels.get(method, method)
     summary = "; ".join(parts) + f". Hallucination score: {score:.2f} (verified by {method_label})."
     return summary
 
@@ -933,8 +943,8 @@ def verify_claims(
     method = "nli" if use_nli else "gemini"
 
     if use_nli:
-        # ── NLI PATH: Extract claims (local) → Verify (DeBERTa) ─────
-        logger.info("Node 5 | Using NLI model (DeBERTa) for verification.")
+        # ── NLI PATH: Extract claims → Classify → Route ─────────────
+        logger.info("Node 5 | Using NLI model (DeBERTa) + EGV routing.")
 
         # Step 2a: Extract atomic claims (local sentence splitting + validation)
         claims = _extract_claims(llm_output, query)
@@ -948,8 +958,18 @@ def verify_claims(
                 verification_method=method,
             )
 
-        # Step 2b: Verify each claim via NLI model
-        verdicts = _verify_claims_nli(claims, rag_output, query)
+        # Step 2b: Classify each claim and route to the appropriate verifier
+        verdicts = _classify_and_verify_claims(
+            claims, llm_output, rag_output, query,
+        )
+
+        # Determine the dominant verification method for the report
+        methods_used = {v.verification_method for v in verdicts}
+        if len(methods_used) > 1:
+            method = "mixed"
+        elif methods_used:
+            method = methods_used.pop()
+        # else: stays as "nli"
     else:
         # ── GEMINI FALLBACK: Extract + Verify in one call ────────────
         logger.info("Node 5 | Using Gemini fallback for verification.")
@@ -965,11 +985,17 @@ def verify_claims(
             verification_method=method,
         )
 
-    # ── Step 3: Compute hallucination score ──────────────────────────
+    # ── Step 3: Surgical correction for CONTRADICTED claims ──────────
+    if ENABLE_SURGICAL_CORRECTION:
+        verdicts, llm_output = _apply_surgical_corrections(
+            verdicts, llm_output, rag_output,
+        )
+
+    # ── Step 4: Compute hallucination score ──────────────────────────
     score = _compute_hallucination_score(verdicts, alignment_score)
     detected = score >= HALLUCINATION_THRESHOLD
 
-    # ── Step 4: Generate summary ─────────────────────────────────────
+    # ── Step 5: Generate summary ─────────────────────────────────────
     summary = _generate_summary(verdicts, score, method)
 
     report = HallucinationReport(
@@ -993,3 +1019,290 @@ def verify_claims(
     )
 
     return report
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9. Claim Classification + EGV Routing
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _classify_and_verify_claims(
+    claims: List[str],
+    llm_output: str,
+    rag_output: str,
+    query: str,
+) -> List[ClaimVerdict]:
+    """
+    Classify each extracted claim and route to the correct verifier.
+
+    Flow per claim:
+      factual → NLI (batched for efficiency)
+      code    → verify_code_claim (EGV)
+      math    → verify_math_claim (EGV)
+
+    Factual claims are batched together into a single _verify_claims_nli()
+    call to preserve the DeBERTa batch-inference performance.
+
+    Args:
+        claims:     List of extracted atomic claim strings.
+        llm_output: The full LLM answer (needed for code snippet extraction).
+        rag_output: RAG-retrieved context.
+        query:      The user's original query.
+
+    Returns:
+        List of ClaimVerdict objects, each tagged with verification_method.
+    """
+    from nodes.claim_classifier import classify_claim  # type: ignore[import-not-found]
+
+    # ── Classify all claims ───────────────────────────────────────────
+    factual_claims: List[str] = []
+    code_claims: List[str] = []
+    math_claims: List[str] = []
+
+    # Preserve original order: (index, claim, type)
+    claim_routing: List[tuple] = []
+
+    for i, claim in enumerate(claims):
+        if ENABLE_EGV:
+            claim_type = classify_claim(claim)
+        else:
+            claim_type = "factual"  # EGV disabled → everything goes to NLI
+
+        claim_routing.append((i, claim, claim_type))
+
+        if claim_type == "code":
+            code_claims.append(claim)
+        elif claim_type == "math":
+            math_claims.append(claim)
+        else:
+            factual_claims.append(claim)
+
+    logger.info(
+        "Node 5 | Claim routing: %d factual, %d code, %d math (EGV=%s)",
+        len(factual_claims), len(code_claims), len(math_claims),
+        "enabled" if ENABLE_EGV else "disabled",
+    )
+
+    # ── Verify factual claims via NLI (batched) ───────────────────────
+    factual_verdicts: Dict[str, ClaimVerdict] = {}
+    if factual_claims:
+        nli_verdicts = _verify_claims_nli(factual_claims, rag_output, query)
+        for claim_str, verdict in zip(factual_claims, nli_verdicts):
+            verdict.verification_method = "NLI"
+            factual_verdicts[claim_str] = verdict
+
+    # ── Verify code claims via EGV ────────────────────────────────────
+    code_verdicts: Dict[str, ClaimVerdict] = {}
+    if code_claims:
+        try:
+            from nodes.code_claim_verifier import verify_code_claim  # type: ignore[import-not-found]
+        except ImportError:
+            logger.warning("Node 5 | code_claim_verifier not available, falling back to NLI.")
+            # Fall back to NLI for code claims
+            nli_fallback = _verify_claims_nli(code_claims, rag_output, query)
+            for claim_str, verdict in zip(code_claims, nli_fallback):
+                verdict.verification_method = "NLI"
+                code_verdicts[claim_str] = verdict
+        else:
+            for claim_str in code_claims:
+                code_verdicts[claim_str] = _verify_single_code_claim(
+                    claim_str, llm_output, rag_output, verify_code_claim,
+                )
+
+    # ── Verify math claims via EGV ────────────────────────────────────
+    math_verdicts: Dict[str, ClaimVerdict] = {}
+    if math_claims:
+        try:
+            from nodes.math_claim_verifier import verify_math_claim  # type: ignore[import-not-found]
+        except ImportError:
+            logger.warning("Node 5 | math_claim_verifier not available, falling back to NLI.")
+            nli_fallback = _verify_claims_nli(math_claims, rag_output, query)
+            for claim_str, verdict in zip(math_claims, nli_fallback):
+                verdict.verification_method = "NLI"
+                math_verdicts[claim_str] = verdict
+        else:
+            for claim_str in math_claims:
+                math_verdicts[claim_str] = _verify_single_math_claim(
+                    claim_str, verify_math_claim,
+                )
+
+    # ── Reassemble in original order ──────────────────────────────────
+    all_verdicts: List[ClaimVerdict] = []
+    for _i, claim_str, claim_type in claim_routing:
+        if claim_type == "code" and claim_str in code_verdicts:
+            all_verdicts.append(code_verdicts[claim_str])
+        elif claim_type == "math" and claim_str in math_verdicts:
+            all_verdicts.append(math_verdicts[claim_str])
+        elif claim_str in factual_verdicts:
+            all_verdicts.append(factual_verdicts[claim_str])
+        else:
+            # Safety fallback — should not happen
+            all_verdicts.append(ClaimVerdict(
+                claim=claim_str,
+                verdict="UNVERIFIABLE",
+                evidence="",
+                confidence=0.3,
+                verification_method="NLI",
+            ))
+
+    return all_verdicts
+
+
+def _verify_single_code_claim(
+    claim: str,
+    llm_output: str,
+    rag_output: str,
+    verify_fn: Any,
+) -> ClaimVerdict:
+    """
+    Verify a single code claim via verify_code_claim and convert
+    the result dict into a ClaimVerdict.
+    """
+    import re as _re
+
+    # Extract code snippet from LLM output for verification
+    code_block_re = _re.compile(r"```(?:python|py)?\s*\n([\s\S]*?)```", _re.IGNORECASE)
+    blocks = code_block_re.findall(llm_output)
+    code_snippet = blocks[0].strip() if blocks else llm_output
+
+    try:
+        result = verify_fn(claim, code_snippet)
+    except Exception as e:
+        logger.warning("Node 5 | EGV code verification failed for claim: %s", e)
+        return ClaimVerdict(
+            claim=claim,
+            verdict="UNVERIFIABLE",
+            evidence=f"Code verification error: {e}",
+            confidence=0.3,
+            verification_method="EGV_CODE",
+        )
+
+    verdict_str = result.get("verdict", "UNKNOWN")
+    failed_tests = result.get("failed_tests", [])
+
+    # Map EGV verdicts to claim verdicts
+    verdict_map = {
+        "SUPPORTED": "SUPPORTED",
+        "CONTRADICTED": "CONTRADICTED",
+        "UNKNOWN": "UNVERIFIABLE",
+    }
+
+    evidence_parts = []
+    for ft in failed_tests:
+        evidence_parts.append(
+            f"Test '{ft.get('description', '?')}': "
+            f"input={ft.get('input', '?')}, "
+            f"expected={ft.get('expected', '?')}, "
+            f"actual={ft.get('actual', '?')}"
+        )
+    evidence = "; ".join(evidence_parts) if evidence_parts else "All tests passed."
+
+    return ClaimVerdict(
+        claim=claim,
+        verdict=verdict_map.get(verdict_str, "UNVERIFIABLE"),
+        evidence=evidence,
+        confidence=1.0 if verdict_str == "SUPPORTED" else (0.9 if verdict_str == "CONTRADICTED" else 0.3),
+        reasoning=f"EGV code verification: {verdict_str} ({len(failed_tests)} test(s) failed)",
+        verification_method="EGV_CODE",
+    )
+
+
+def _verify_single_math_claim(
+    claim: str,
+    verify_fn: Any,
+) -> ClaimVerdict:
+    """
+    Verify a single math claim via verify_math_claim and convert
+    the result dict into a ClaimVerdict.
+    """
+    try:
+        result = verify_fn(claim)
+    except Exception as e:
+        logger.warning("Node 5 | EGV math verification failed for claim: %s", e)
+        return ClaimVerdict(
+            claim=claim,
+            verdict="UNVERIFIABLE",
+            evidence=f"Math verification error: {e}",
+            confidence=0.3,
+            verification_method="EGV_MATH",
+        )
+
+    verdict_str = result.get("verdict", "UNKNOWN")
+    computed = result.get("computed", None)
+
+    verdict_map = {
+        "SUPPORTED": "SUPPORTED",
+        "CONTRADICTED": "CONTRADICTED",
+        "UNKNOWN": "UNVERIFIABLE",
+    }
+
+    evidence = f"SymPy computed: {computed}" if computed else "Could not extract verifiable math."
+
+    return ClaimVerdict(
+        claim=claim,
+        verdict=verdict_map.get(verdict_str, "UNVERIFIABLE"),
+        evidence=evidence,
+        confidence=1.0 if verdict_str == "SUPPORTED" else (0.95 if verdict_str == "CONTRADICTED" else 0.3),
+        reasoning=f"EGV math verification: {verdict_str} (computed={computed})",
+        verification_method="EGV_MATH",
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10. Surgical Correction (post-processing)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _apply_surgical_corrections(
+    verdicts: List[ClaimVerdict],
+    llm_output: str,
+    rag_output: str,
+) -> tuple:
+    """
+    Post-process verdicts: surgically correct each CONTRADICTED claim.
+
+    Uses surgical_correct_single to replace only the wrong claim in the
+    full answer, preserving everything else.
+
+    Args:
+        verdicts:   List of ClaimVerdict objects.
+        llm_output: The original LLM answer text.
+        rag_output: RAG-retrieved evidence context.
+
+    Returns:
+        Tuple of (verdicts, corrected_output). Verdicts are unchanged;
+        corrected_output has CONTRADICTED claims replaced.
+    """
+    contradicted = [v for v in verdicts if v.verdict == "CONTRADICTED"]
+    if not contradicted:
+        return verdicts, llm_output
+
+    try:
+        from nodes.surgical_corrector import surgical_correct_single  # type: ignore[import-not-found]
+    except ImportError:
+        logger.warning("Node 5 | surgical_corrector not available, skipping corrections.")
+        return verdicts, llm_output
+
+    corrected = llm_output
+    corrections = 0
+
+    for v in contradicted:
+        evidence = v.evidence if v.evidence else rag_output[:3000]
+        try:
+            corrected = surgical_correct_single(corrected, v.claim, evidence)
+            corrections += 1
+            logger.info(
+                "Node 5 | Surgically corrected [%s]: '%s'",
+                v.verification_method, v.claim[:60],
+            )
+        except Exception as e:
+            logger.warning(
+                "Node 5 | Surgical correction failed for '%s': %s",
+                v.claim[:60], e,
+            )
+
+    if corrections:
+        logger.info(
+            "Node 5 | Applied %d/%d surgical corrections.",
+            corrections, len(contradicted),
+        )
+
+    return verdicts, corrected

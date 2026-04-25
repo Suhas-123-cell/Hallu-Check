@@ -110,6 +110,7 @@ class ClaimVerdictSchema(BaseModel):
     evidence: str          # RAG snippet backing the verdict
     confidence: float      # 0.0–1.0
     reasoning: str = ""    # Brief reasoning chain for the verdict
+    verification_method: str = "NLI"  # "NLI", "EGV_CODE", "EGV_MATH" — per-claim verifier used
 
 
 class GenerateResponse(BaseModel):
@@ -310,6 +311,7 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
                 evidence=cv.evidence,
                 confidence=cv.confidence,
                 reasoning=cv.reasoning,
+                verification_method=cv.verification_method,
             )
             for cv in hallu_report.claim_verdicts
         ],
@@ -528,6 +530,7 @@ async def _handle_factual(query: str) -> GenerateResponse:
                     evidence=cv.evidence,
                     confidence=cv.confidence,
                     reasoning=cv.reasoning,
+                    verification_method=cv.verification_method,
                 )
                 for cv in hallu_report.claim_verdicts
             ],
