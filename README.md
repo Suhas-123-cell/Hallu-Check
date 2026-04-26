@@ -65,6 +65,21 @@ flowchart TD
     REF --> OUT
 ```
 
+  ### 8-Node Pipeline (explicit map)
+
+  This project is organized as an 8-node agentic pipeline (including the Gatekeeper):
+
+  1. **Node 0 — Gatekeeper**: classify route (`FACTUAL` / `REASONING` / `CHITCHAT`)
+  2. **Node 1 — Generator**: produce first-pass answer (small LLM)
+  3. **Node 1.5 — Self-Consistency / RLM**: route-dependent stabilization
+  4. **Node 2 — Keyword Extraction**: build search query terms (FACTUAL)
+  5. **Node 3 — Web Search + Scrape**: depth-2 crawl + C-RAG filtering
+  6. **Node 4 — PageIndex RAG**: tree retrieval + NLI alignment scoring
+  7. **Node 5 — Claim Verification**: atomic-claim verdicts (`SUPPORTED`/`CONTRADICTED`/`UNVERIFIABLE`)
+  8. **Node 6 — Refinement**: iterative/surgical correction when hallucination is detected
+
+  Final answer emission happens after Node 6 (or earlier for CHITCHAT).
+
 ### Three Routes — One Shared Brain
 
 All routes flow through the same **Generator**, and FACTUAL + REASONING converge at the same **Claim Verifier** and **Refiner** — only the middle stages differ:
@@ -248,14 +263,15 @@ curl -X POST http://localhost:8000/generate \
   "query_category": "FACTUAL",
   "llm_output": "...",
   "rag_output": "...",
-  "bertscore": {"precision": 0.85, "recall": 0.82, "f1": 0.83, "alignment_score": 0.83, "method": "nli"},
+  "alignment_score": {"precision": 0.85, "recall": 0.82, "f1": 0.83, "alignment_score": 0.83, "method": "nli"},
   "claim_verdicts": [
     {
       "claim": "Narendra Modi is the PM of India",
       "verdict": "SUPPORTED",
       "evidence": "...",
       "confidence": 0.95,
-      "reasoning": "NLI model classified with P(entailment)=0.950, P(neutral)=0.030, P(contradiction)=0.020"
+      "reasoning": "NLI model classified with P(entailment)=0.950, P(neutral)=0.030, P(contradiction)=0.020",
+      "verification_method": "NLI"
     }
   ],
   "hallucination_score": 0.04,
