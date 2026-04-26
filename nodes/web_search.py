@@ -20,26 +20,17 @@ import concurrent.futures
 from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple
-from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx  # type: ignore[import-untyped]
 from bs4 import BeautifulSoup  # type: ignore[import-untyped]
-import google.genai as genai  # type: ignore[import-untyped]
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-)
+from tenacity import retry, stop_after_attempt, wait_exponential  # type: ignore
 from config import (  # type: ignore
-    GEMINI_API_KEY,
-    GEMINI_MODEL,
-    SCRAPED_MD_DIR,
     SEARCH_MAX_RESULTS,
     generate_md_path,
 )
 import random
 import time
-import json
 from ddgs import DDGS  # type: ignore[import-untyped]
 import nltk  # type: ignore[import-untyped]
 from nltk.chunk import ne_chunk  # type: ignore[import-untyped]
@@ -88,17 +79,7 @@ def has_person_name(keywords: List[str]) -> bool:
     if has_person:
         logger.info(f"Node 2 | Detected person name(s): {entities['PERSON']}")
     return has_person
-def expand_queries(keywords):
-    """
-    Generate 2-3 targeted search variations from input keywords.
-    """
-    base = " ".join(keywords)
-    variations = [
-        base,
-        f"{base} site:news",  # recent news
-        f"{base} documentation"  # technical docs
-    ]
-    return variations[:3]  # type: ignore
+
 
 
 def _wants_recent_info(query: str | None, keywords: List[str]) -> bool:
@@ -205,37 +186,7 @@ def _score_result_recency(
 
     return score
 
-def web_search_with_filters(keywords, max_results=20):
-    """
-    Perform web search for each query variation using ddgs.
-    Returns a list of dicts: {title, href, body (snippet)}.
-    No API key needed.
-    """
-    queries = expand_queries(keywords)
-    all_results = []
-    seen_urls = set()
-    core_keywords = set(kw.lower() for kw in keywords)
 
-    for q in queries:
-        try:
-            hits = list(DDGS().text(q, max_results=min(max_results, 10)))
-            for r in hits:
-                item_url = r.get("href", "")
-                title = r.get("title", "")
-                snippet = r.get("body", "")
-                if not item_url or not snippet:
-                    continue
-                if not any(kw in snippet.lower() for kw in core_keywords):
-                    continue
-                if item_url in seen_urls:
-                    continue
-                seen_urls.add(item_url)
-                all_results.append({"title": title, "href": item_url, "body": snippet})
-        except Exception as e:
-            logging.warning(f"[Web Search ERROR] {e}")
-        time.sleep(random.uniform(0.5, 1.5))
-
-    return all_results
 
 logger = logging.getLogger("hallu-check.web_search")
 

@@ -2,17 +2,16 @@
 hallu-check | nodes/generator.py
 Node 1 — Original LLM Generator
 
-Calls Qwen2.5-1.5B-Instruct via the HuggingFace Inference API
-(serverless — no local GPU required) and returns a preliminary answer.
+Calls Llama 3.2 via Ollama (local, free) or HuggingFace Inference API
+(fallback) and returns a preliminary answer.
 
-Compatible with huggingface_hub >= 1.0.0 (installed: 1.5.0).
-The model is passed at call time (not in the constructor) per the
-current InferenceClient API.
+Priority:
+  1. Ollama (localhost:11434) — free, no quota, Metal-accelerated
+  2. HuggingFace Inference API — free tier, may hit quota limits
 """
 from __future__ import annotations
 
 import logging
-from huggingface_hub import InferenceClient  # type: ignore[import-untyped, import-not-found]
 from tenacity import retry, stop_after_attempt, wait_exponential  # type: ignore[import-untyped, import-not-found]
 
 from config import HF_API_TOKEN, LOCAL_MODEL_ID  # type: ignore[import-not-found]
@@ -27,7 +26,9 @@ logger = logging.getLogger("hallu-check.generator")
 )
 def generate_llm_output(query: str) -> str:
     """
-    Node 1 — call HuggingFace API to produce a fast preliminary answer.
+    Node 1 — generate a preliminary LLM answer.
+
+    Uses Ollama (local) as primary backend, falls back to HuggingFace API.
 
     Args:
         query: The user's natural-language question.
@@ -35,14 +36,6 @@ def generate_llm_output(query: str) -> str:
     Returns:
         The model's raw text response (the LLM Output).
     """
-    logger.info("Node 1 | Calling %s via HuggingFace API…", LOCAL_MODEL_ID)
-
-    if not HF_API_TOKEN:
-        raise EnvironmentError(
-            "HF_API_TOKEN is not set. Add it to your .env file.\n"
-            "Get one at https://huggingface.co/settings/tokens"
-        )
-
     messages = [
         {
             "role": "system",
@@ -54,6 +47,33 @@ def generate_llm_output(query: str) -> str:
         {"role": "user", "content": query},
     ]
 
+    # ── Primary: Ollama (local, free) ────────────────────────────────
+    try:
+        from nodes.local_llm import chat_completion, is_available  # type: ignore[import-not-found]
+        if is_available():
+            llm_output = chat_completion(
+                messages=messages,
+                max_tokens=2048,
+                temperature=0.3,
+                top_p=0.9,
+            )
+            if llm_output:
+                logger.info("Node 1 | LLM output received via Ollama (%d chars).", len(llm_output))
+                return llm_output
+    except Exception as e:
+        logger.warning("Node 1 | Ollama failed: %s", str(e)[:120])
+
+    # ── Fallback: HuggingFace Inference API ──────────────────────────
+    logger.info("Node 1 | Falling back to HuggingFace API (%s)…", LOCAL_MODEL_ID)
+
+    if not HF_API_TOKEN:
+        raise EnvironmentError(
+            "Neither Ollama nor HF_API_TOKEN available. "
+            "Start Ollama with: brew services start ollama\n"
+            "Or set HF_API_TOKEN in your .env file."
+        )
+
+    from huggingface_hub import InferenceClient  # type: ignore[import-untyped, import-not-found]
     client = InferenceClient(api_key=HF_API_TOKEN, timeout=120)
 
     try:
@@ -95,7 +115,7 @@ def generate_llm_output_with_context(
     system_prompt: str | None = None,
 ) -> str:
     """
-    Node 1 (contextual) — call HuggingFace API with grounded context.
+    Node 1 (contextual) — generate an answer grounded in RAG context.
 
     Args:
         query: The refined user question/prompt.
@@ -105,14 +125,6 @@ def generate_llm_output_with_context(
     Returns:
         The model's grounded text response.
     """
-    logger.info("Node 6 | Calling %s via HuggingFace API (refined)…", LOCAL_MODEL_ID)
-
-    if not HF_API_TOKEN:
-        raise EnvironmentError(
-            "HF_API_TOKEN is not set. Add it to your .env file.\n"
-            "Get one at https://huggingface.co/settings/tokens"
-        )
-
     base_system_prompt = (
         system_prompt
         or "You are a factual question-answering assistant. "
@@ -136,6 +148,31 @@ def generate_llm_output_with_context(
         {"role": "user", "content": user_prompt},
     ]
 
+    # ── Primary: Ollama (local, free) ────────────────────────────────
+    try:
+        from nodes.local_llm import chat_completion, is_available  # type: ignore[import-not-found]
+        if is_available():
+            llm_output = chat_completion(
+                messages=messages,
+                max_tokens=2048,
+                temperature=0.2,
+                top_p=0.9,
+            )
+            if llm_output:
+                logger.info("Node 6 | Refined LLM output via Ollama (%d chars).", len(llm_output))
+                return llm_output
+    except Exception as e:
+        logger.warning("Node 6 | Ollama failed: %s", str(e)[:120])
+
+    # ── Fallback: HuggingFace Inference API ──────────────────────────
+    logger.info("Node 6 | Falling back to HuggingFace API (%s)…", LOCAL_MODEL_ID)
+
+    if not HF_API_TOKEN:
+        raise EnvironmentError(
+            "Neither Ollama nor HF_API_TOKEN available."
+        )
+
+    from huggingface_hub import InferenceClient  # type: ignore[import-untyped, import-not-found]
     client = InferenceClient(api_key=HF_API_TOKEN, timeout=120)
 
     try:
@@ -148,7 +185,6 @@ def generate_llm_output_with_context(
         )
     except Exception as e:
         error_str = str(e)
-        # Gracefully handle payload-too-large / context-window-exceeded errors
         if any(code in error_str for code in ("413", "422", "payload too large", "context window", "token limit")):
             logger.error(
                 "Node 6 | Input too large for model context window: %s", error_str[:200]

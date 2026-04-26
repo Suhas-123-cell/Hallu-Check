@@ -148,13 +148,28 @@ def _heuristic_classify(claim: str) -> ClaimType | None:
 
     Returns the label if confident, or ``None`` to fall through to Gemini.
     """
+    claim_lower = claim.lower()
+
+    # ── Historical/biographical override (always factual) ─────────────
+    # These phrases describe origins/people/events and should never be
+    # routed to code verification even if other code-like tokens exist.
+    factual_override_phrases = (
+        "was invented",
+        "was created",
+        "was developed",
+        "was introduced",
+        "was born",
+        "was founded",
+    )
+    if any(phrase in claim_lower for phrase in factual_override_phrases):
+        logger.debug("claim_classifier | heuristic → factual (historical override)")
+        return "factual"
+
     # ── Code check (highest priority — code often embeds math) ────────
     for pat in _CODE_PATTERNS:
         if pat.search(claim):
             logger.debug("claim_classifier | heuristic → code (pattern: %s)", pat.pattern[:30])
             return "code"
-
-    claim_lower = claim.lower()
 
     code_hits = sum(1 for kw in _CODE_KEYWORDS if kw in claim_lower)
     if code_hits >= 2:
@@ -224,28 +239,47 @@ Label:"""
 
 def _gemini_classify(claim: str) -> ClaimType:
     """
-    Stage 2: Classify via a single Gemini call.
+    Stage 2: Classify via a single LLM call (local Ollama, or Gemini fallback).
 
-    Re-uses the existing Gemini helper from claim_verifier to honour
-    rate-limit retries and SSL workarounds already in place.
+    Uses the local LLM module for zero-cost classification.
+    Falls back to Gemini if Ollama is unavailable.
     """
-    try:
-        from nodes.claim_verifier import _gemini_generate  # type: ignore[import-not-found]
-    except ImportError:
-        logger.warning("claim_classifier | Cannot import _gemini_generate, defaulting to 'factual'.")
-        return "factual"
-
     prompt = _GEMINI_PROMPT.format(claim=claim.replace('"', '\\"'))
-    raw = _gemini_generate(prompt).strip().lower()
+
+    raw = ""
+
+    # ── Primary: Local LLM via Ollama ────────────────────────────────────
+    try:
+        from nodes.local_llm import chat_completion, is_available  # type: ignore[import-not-found]
+        if is_available():
+            raw = chat_completion(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=10,
+                temperature=0.0,
+            ).strip().lower()
+    except Exception as e:
+        logger.warning("claim_classifier | Local LLM failed: %s", str(e)[:100])
+
+    # ── Fallback: Gemini ─────────────────────────────────────────────────
+    if not raw:
+        try:
+            from nodes.claim_verifier import _gemini_generate  # type: ignore[import-not-found]
+            raw = _gemini_generate(prompt).strip().lower()
+        except Exception:
+            pass
+
+    if not raw:
+        logger.warning("claim_classifier | All LLMs failed, defaulting to 'factual'.")
+        return "factual"
 
     # Parse — accept the first valid label found in the response
     for label in ("code", "math", "factual"):
         if label in raw:
-            logger.info("claim_classifier | Gemini → %s (raw=%r)", label, raw[:40])
+            logger.info("claim_classifier | LLM → %s (raw=%r)", label, raw[:40])
             return label  # type: ignore[return-value]
 
-    # If Gemini returned garbage, default to factual (safest path — triggers NLI)
-    logger.warning("claim_classifier | Gemini returned unparseable %r, defaulting to 'factual'.", raw[:60])
+    # If LLM returned garbage, default to factual (safest path — triggers NLI)
+    logger.warning("claim_classifier | LLM returned unparseable %r, defaulting to 'factual'.", raw[:60])
     return "factual"
 
 

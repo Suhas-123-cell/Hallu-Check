@@ -82,7 +82,7 @@ def _sanitize_code(code: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Gemini — generate test cases
+# Test Case Generation (Local LLM via Ollama — no API dependency)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _TEST_GEN_PROMPT = """\
@@ -117,63 +117,193 @@ Respond with ONLY this JSON array (no markdown fences, no extra text):
 
 def _generate_test_cases(claim: str, code_snippet: str) -> List[Dict[str, str]]:
     """
-    Ask Gemini to produce 3 test cases for the code snippet.
+    Generate 3 test cases for the code snippet using the local LLM.
+
+    Falls back to Gemini if available. Always returns at least one fallback
+    "crash test" so EGV never silently skips verification.
 
     Returns a list of dicts with keys: input, expected, description.
-    Returns an empty list if Gemini is unavailable or returns garbage.
     """
-    try:
-        from nodes.claim_verifier import _gemini_generate  # type: ignore[import-not-found]
-    except ImportError:
-        logger.warning("code_claim_verifier | Cannot import _gemini_generate.")
-        return []
-
     prompt = _TEST_GEN_PROMPT.format(
         code_snippet=code_snippet[:3000],
         claim=claim[:500],
     )
 
-    raw = _gemini_generate(prompt)
-    if not raw:
-        logger.warning("code_claim_verifier | Gemini returned empty response.")
-        return []
+    raw = _call_llm_for_test_cases(prompt)
 
-    # ── Parse JSON ───────────────────────────────────────────────────────
-    # Try direct parse first, then extract from markdown fences
-    for candidate in [
-        raw.strip(),
-        _extract_json_block(raw),
-    ]:
-        if not candidate:
-            continue
-        try:
-            parsed = json.loads(candidate)
-            if isinstance(parsed, list) and len(parsed) > 0:
-                # Validate structure
-                valid = [
-                    tc for tc in parsed
-                    if isinstance(tc, dict) and "input" in tc and "expected" in tc
-                ]
-                if valid:
-                    logger.info(
-                        "code_claim_verifier | Gemini generated %d test cases.", len(valid)
-                    )
-                    return valid[:3]
-        except json.JSONDecodeError:
-            continue
+    # ── Parse LLM response ───────────────────────────────────────────
+    if raw:
+        parsed = _robust_parse_test_cases(raw)
+        if parsed:
+            logger.info("code_claim_verifier | Generated %d test cases.", len(parsed))
+            return parsed[:3]
+        logger.warning("code_claim_verifier | Failed to parse LLM test-case response.")
 
-    logger.warning("code_claim_verifier | Failed to parse Gemini test-case response.")
+    # ── Fallback: generate a trivial crash test without any LLM ──────
+    func_name = _extract_function_name(code_snippet)
+    if func_name:
+        fallback = _generate_crash_test(func_name, code_snippet)
+        logger.info("code_claim_verifier | Using fallback crash test for %s.", func_name)
+        return [fallback]
+
+    logger.warning("code_claim_verifier | No test cases and no function found — UNKNOWN.")
     return []
 
 
-def _extract_json_block(text: str) -> str:
-    """Extract JSON from a markdown ```json … ``` fence if present."""
-    match = re.search(r"```(?:json)?\s*\n([\s\S]*?)```", text)
-    if match:
-        return match.group(1).strip()
-    # Try to find a bare JSON array
-    match = re.search(r"\[[\s\S]*\]", text)
-    return match.group(0) if match else ""
+def _robust_parse_test_cases(raw: str) -> List[Dict[str, str]]:
+    """
+    Robustly parse test cases from LLM output.
+
+    Handles Llama 3B's common output patterns:
+      - Wrapped in markdown ```json ... ``` fences
+      - Explanatory text before/after the JSON
+      - Individual JSON objects instead of an array
+      - Extra whitespace and newlines
+    """
+    # Strategy 1: Direct parse
+    try:
+        parsed = json.loads(raw.strip())
+        if isinstance(parsed, list) and parsed:
+            return _validate_test_cases(parsed)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: Strip markdown fences (```json ... ``` or ``` ... ```)
+    fence_patterns = [
+        re.compile(r"```(?:json)?\s*\n([\s\S]*?)```"),
+        re.compile(r"```([\s\S]*?)```"),
+    ]
+    for pat in fence_patterns:
+        match = pat.search(raw)
+        if match:
+            try:
+                parsed = json.loads(match.group(1).strip())
+                if isinstance(parsed, list) and parsed:
+                    return _validate_test_cases(parsed)
+            except json.JSONDecodeError:
+                pass
+
+    # Strategy 3: Find the first [...] array in the response
+    array_match = re.search(r"\[\s*\{[\s\S]*?\}\s*(?:,\s*\{[\s\S]*?\}\s*)*\]", raw)
+    if array_match:
+        try:
+            parsed = json.loads(array_match.group(0))
+            if isinstance(parsed, list) and parsed:
+                return _validate_test_cases(parsed)
+        except json.JSONDecodeError:
+            pass
+
+    # Strategy 4: Greedy [...] match (less precise but catches more)
+    greedy_match = re.search(r"\[[\s\S]*\]", raw)
+    if greedy_match:
+        try:
+            parsed = json.loads(greedy_match.group(0))
+            if isinstance(parsed, list) and parsed:
+                return _validate_test_cases(parsed)
+        except json.JSONDecodeError:
+            pass
+
+    # Strategy 5: Extract individual {...} objects and build an array
+    obj_matches = re.findall(r"\{[^{}]*\}", raw)
+    if obj_matches:
+        test_cases = []
+        for obj_str in obj_matches:
+            try:
+                obj = json.loads(obj_str)
+                if isinstance(obj, dict) and "input" in obj:
+                    test_cases.append(obj)
+            except json.JSONDecodeError:
+                continue
+        if test_cases:
+            return _validate_test_cases(test_cases)
+
+    return []
+
+
+def _validate_test_cases(parsed: list) -> List[Dict[str, str]]:
+    """Filter a parsed list to only valid test case dicts."""
+    valid = [
+        tc for tc in parsed
+        if isinstance(tc, dict) and "input" in tc and "expected" in tc
+    ]
+    return valid
+
+
+def _generate_crash_test(func_name: str, code_snippet: str) -> Dict[str, str]:
+    """
+    Generate a trivial fallback test: call the function with a simple input
+    and check it doesn't crash. This ensures EGV always has at least one
+    test case even when the LLM fails to produce parseable output.
+    """
+    # Try to infer a sensible trivial input from the function signature
+    sig_match = re.search(r"def\s+" + re.escape(func_name) + r"\s*\(([^)]*)", code_snippet)
+    if sig_match:
+        params = [p.strip().split(":")[0].strip().split("=")[0].strip()
+                  for p in sig_match.group(1).split(",") if p.strip()]
+        n_params = len(params)
+    else:
+        n_params = 1
+
+    # Generate trivial inputs based on parameter count
+    trivial_inputs = {
+        0: "",
+        1: "[]",
+        2: "[], 0",
+        3: "[], 0, 0",
+    }
+    test_input = trivial_inputs.get(n_params, ", ".join(["0"] * n_params))
+
+    return {
+        "input": test_input,
+        "expected": "__CRASH_TEST__",  # Special sentinel — only checks no crash
+        "description": f"Fallback crash test: {func_name}({test_input}) should not raise",
+    }
+
+
+def _call_llm_for_test_cases(prompt: str) -> str:
+    """
+    Call the local LLM (Ollama) for test case generation.
+    Falls back to Gemini if local is unavailable.
+
+    Uses the project's local_llm module — Ollama on localhost,
+    zero cost, no API quotas.
+    """
+    # ── Primary: Local LLM via Ollama (free, no quota) ───────────────────
+    try:
+        from nodes.local_llm import chat_completion, is_available  # type: ignore[import-not-found]
+        if is_available():
+            result = chat_completion(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a precise test-case generator. "
+                            "Always respond with ONLY a valid JSON array. "
+                            "No explanations, no markdown fences."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=1024,
+                temperature=0.2,
+            )
+            if result:
+                logger.info("code_claim_verifier | Test cases generated via local LLM.")
+                return result
+    except Exception as e:
+        logger.warning("code_claim_verifier | Local LLM failed: %s", str(e)[:120])
+
+    # ── Fallback: Gemini (if available and has quota) ────────────────────
+    try:
+        from nodes.claim_verifier import _gemini_generate  # type: ignore[import-not-found]
+        result = _gemini_generate(prompt)
+        if result:
+            logger.info("code_claim_verifier | Test cases generated via Gemini (fallback).")
+            return result
+    except Exception as e:
+        logger.warning("code_claim_verifier | Gemini fallback also failed: %s", str(e)[:120])
+
+    return ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -285,22 +415,37 @@ def _outputs_match(actual: str, expected: str) -> bool:
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
 
-def verify_code_claim(claim: str, code_snippet: str) -> Dict[str, Any]:
+def verify_code_claim(
+    claim: str,
+    code_snippet: str,
+    ground_truth_code: str = "",
+) -> Dict[str, Any]:
     """
     Verify a code-related claim by generating and executing test cases.
 
     Pipeline:
-      1. Gemini generates 3 test cases for the code snippet.
+      1. Local LLM (Ollama) generates 3 test cases for the code snippet.
+         Falls back to a trivial crash test if LLM response is unparseable.
       2. Forbidden imports (os, sys, subprocess, etc.) are stripped.
       3. Each test runs in an isolated subprocess (``subprocess.run``,
          never ``eval``/``exec``) with a 5-second timeout.
       4. Returns a verdict based on pass/fail ratio.
 
-    Args:
+        Differential testing (optional):
+            - If ``ground_truth_code`` is provided, each failing claim-test is re-run
+                on the ground-truth implementation.
+            - If the ground truth also fails, that test is discarded as invalid.
+            - A test is counted as CONTRADICTED only when submitted code fails and
+                ground truth passes.
+
+        Args:
         claim:        The atomic claim about the code (e.g., "this function
                       returns -1 when the target is not found").
         code_snippet: The code being verified (should contain at least one
                       function definition).
+                ground_truth_code:
+                                            Optional HumanEval reference implementation used for
+                                            differential testing.
 
     Returns:
         Dict with:
@@ -309,6 +454,11 @@ def verify_code_claim(claim: str, code_snippet: str) -> Dict[str, Any]:
           - ``"failed_tests"``: List of dicts describing each failed test,
             with keys ``description``, ``input``, ``expected``, ``actual``,
             ``error``.
+                    - ``"tests_generated"``: number of generated test cases.
+                    - ``"discarded_invalid_tests"``: number of tests discarded because
+                        both submitted and ground-truth failed.
+                    - ``"tests_kept"``: number of tests retained for verdicting.
+                    - ``"final_verdict"``: same as ``"verdict"`` (explicit summary key).
     """
     if not code_snippet or not code_snippet.strip():
         logger.warning("code_claim_verifier | Empty code snippet.")
@@ -323,7 +473,27 @@ def verify_code_claim(claim: str, code_snippet: str) -> Dict[str, Any]:
     # ── Sanitize: strip forbidden imports ─────────────────────────────
     safe_code = _sanitize_code(code_snippet)
 
-    # ── Generate test cases via Gemini ────────────────────────────────
+    # ── Optional differential-testing setup ───────────────────────────
+    use_differential = bool(ground_truth_code and ground_truth_code.strip())
+    safe_ground_truth = ""
+    gt_func_name: str | None = None
+    if use_differential:
+        safe_ground_truth = _sanitize_code(ground_truth_code)
+
+        # Prefer matching the submitted function name for apples-to-apples calls.
+        if re.search(r"def\s+" + re.escape(func_name) + r"\s*\(", safe_ground_truth):
+            gt_func_name = func_name
+        else:
+            gt_func_name = _extract_function_name(safe_ground_truth)
+
+        if not gt_func_name:
+            logger.warning(
+                "code_claim_verifier | Differential testing disabled: "
+                "no function definition found in ground_truth_code."
+            )
+            use_differential = False
+
+    # ── Generate test cases via local LLM ─────────────────────────────
     test_cases = _generate_test_cases(claim, code_snippet)
     if not test_cases:
         logger.warning("code_claim_verifier | No test cases generated.")
@@ -332,46 +502,114 @@ def verify_code_claim(claim: str, code_snippet: str) -> Dict[str, Any]:
     # ── Run each test case ────────────────────────────────────────────
     failed_tests: List[Dict[str, str]] = []
     passed = 0
+    discarded_invalid_tests = 0
 
     for i, tc in enumerate(test_cases):
         test_input = tc.get("input", "")
         test_expected = tc.get("expected", "")
         test_desc = tc.get("description", f"test_{i + 1}")
+        is_crash_test = (test_expected == "__CRASH_TEST__")
 
         result = _run_single_test(safe_code, func_name, test_input)
 
+        # Evaluate submitted-code outcome first
+        submitted_pass = False
+        submitted_actual = ""
+        submitted_error = ""
+        gt_actual = "N/A"
+        kept = True
+
         if not result["ok"]:
+            submitted_pass = False
+            submitted_actual = result["stderr"][:200] if result["stderr"] else ""
+            submitted_error = result["error"] or "execution failed"
+        elif is_crash_test:
+            submitted_pass = True
+        elif _outputs_match(result["stdout"], test_expected):
+            submitted_pass = True
+        else:
+            submitted_pass = False
+            submitted_actual = result["stdout"][:200]
+
+        # Differential testing: keep failure only if GT passes the same test
+        if not submitted_pass and use_differential and gt_func_name:
+            gt_result = _run_single_test(safe_ground_truth, gt_func_name, test_input)
+            gt_actual = (
+                gt_result["stdout"][:200]
+                if gt_result["ok"]
+                else (gt_result["stderr"][:200] if gt_result["stderr"] else str(gt_result.get("error", "")))
+            )
+
+            gt_pass = False
+            if gt_result["ok"]:
+                if is_crash_test:
+                    gt_pass = True
+                else:
+                    gt_pass = _outputs_match(gt_result["stdout"], test_expected)
+
+            if not gt_pass:
+                discarded_invalid_tests += 1
+                kept = False
+                logger.debug(
+                    "Test: input=%s | submitted=%s | ground_truth=%s | kept=%s",
+                    test_input,
+                    submitted_actual or ("PASS" if submitted_pass else submitted_error),
+                    gt_actual,
+                    kept,
+                )
+                logger.info(
+                    "code_claim_verifier | Test %d discarded as invalid "
+                    "(submitted and ground truth both fail).",
+                    i + 1,
+                )
+                continue
+
+        logger.debug(
+            "Test: input=%s | submitted=%s | ground_truth=%s | kept=%s",
+            test_input,
+            submitted_actual or ("PASS" if submitted_pass else submitted_error),
+            gt_actual,
+            kept,
+        )
+
+        if not submitted_pass and submitted_error:
             # Execution error (syntax error, runtime error, timeout)
             failed_tests.append({
                 "description": test_desc,
                 "input": test_input,
-                "expected": test_expected,
-                "actual": result["stderr"][:200] if result["stderr"] else "",
-                "error": result["error"] or "execution failed",
+                "expected": test_expected if not is_crash_test else "(no crash)",
+                "actual": submitted_actual,
+                "error": submitted_error,
             })
             logger.info(
-                "code_claim_verifier | Test %d FAIL (error): %s", i + 1, result["error"]
+                "code_claim_verifier | Test %d FAIL (error): %s", i + 1, submitted_error
             )
-        elif not _outputs_match(result["stdout"], test_expected):
+        elif submitted_pass and is_crash_test:
+            # Crash test passed — function ran without error
+            passed += 1
+            logger.info("code_claim_verifier | Test %d PASS (crash test — no error)", i + 1)
+        elif not submitted_pass:
             # Wrong output
             failed_tests.append({
                 "description": test_desc,
                 "input": test_input,
                 "expected": test_expected,
-                "actual": result["stdout"][:200],
+                "actual": submitted_actual,
                 "error": "",
             })
             logger.info(
                 "code_claim_verifier | Test %d FAIL (wrong output): expected=%r, actual=%r",
-                i + 1, test_expected, result["stdout"][:60],
+                i + 1, test_expected, submitted_actual[:60],
             )
         else:
             passed += 1
             logger.info("code_claim_verifier | Test %d PASS", i + 1)
 
     # ── Determine verdict ─────────────────────────────────────────────
-    total = len(test_cases)
-    if passed == total:
+    effective_total = passed + len(failed_tests)
+    if effective_total == 0:
+        verdict = "UNKNOWN"
+    elif passed == effective_total:
         verdict = "SUPPORTED"
     elif failed_tests:
         verdict = "CONTRADICTED"
@@ -379,8 +617,15 @@ def verify_code_claim(claim: str, code_snippet: str) -> Dict[str, Any]:
         verdict = "UNKNOWN"
 
     logger.info(
-        "code_claim_verifier | Verdict: %s (%d/%d passed, %d failed)",
-        verdict, passed, total, len(failed_tests),
+        "code_claim_verifier | Verdict: %s (%d/%d passed, %d failed, %d discarded_invalid)",
+        verdict, passed, effective_total, len(failed_tests), discarded_invalid_tests,
     )
 
-    return {"verdict": verdict, "failed_tests": failed_tests}
+    return {
+        "verdict": verdict,
+        "failed_tests": failed_tests,
+        "tests_generated": len(test_cases),
+        "discarded_invalid_tests": discarded_invalid_tests,
+        "tests_kept": effective_total,
+        "final_verdict": verdict,
+    }

@@ -14,12 +14,8 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, List, Optional
-import warnings
+from typing import Any, AsyncGenerator, Dict, List
 
-# Suppress annoying third-party deprecation warnings (from langchain/google)
-warnings.filterwarnings("ignore", category=FutureWarning, module="langchain_google_genai")
-warnings.filterwarnings("ignore", category=UserWarning, module="langchain_core")
 
 import nltk  # type: ignore[import-untyped]
 from fastapi import FastAPI, HTTPException  # type: ignore[import-untyped, import-not-found]
@@ -88,7 +84,13 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:8000",
+        "https://hallu-check.vercel.app",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -118,7 +120,7 @@ class GenerateResponse(BaseModel):
     query_category: str                       # FACTUAL, REASONING, CHITCHAT
     llm_output: str
     rag_output: str
-    bertscore: dict
+    alignment_score: Dict[str, Any]           # NLI-based alignment (replaces bertscore)
     claim_verdicts: List[ClaimVerdictSchema]   # Per-claim breakdown
     hallucination_score: float                 # 0.0 (clean) → 1.0 (fully hallucinated)
     hallucination_detected: bool              # Clear boolean flag
@@ -145,7 +147,7 @@ async def _handle_chitchat(query: str) -> GenerateResponse:
         query_category="CHITCHAT",
         llm_output=llm_output,
         rag_output="",
-        bertscore={"precision": 1.0, "recall": 1.0, "f1": 1.0},
+        alignment_score={"precision": 1.0, "recall": 1.0, "f1": 1.0},
         claim_verdicts=[],
         hallucination_score=0.0,
         hallucination_detected=False,
@@ -182,7 +184,7 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
 
     # ── Synthetic context for reasoning queries ──────────────────────
     rag_output = "No external context required for reasoning/logic queries."
-    bertscore = {"precision": 0.5, "recall": 0.5, "f1": 0.5}
+    alignment = {"precision": 0.5, "recall": 0.5, "f1": 0.5}
 
     # ── EGV: Execution-Grounded Verification (for CODE/MATH) ─────────
     execution_verdict = None
@@ -214,13 +216,13 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
 
     # ── Node 5: Claim Verification ───────────────────────────────────
     logger.info("── Node 5: Claim verification…")
-    nli_alignment = bertscore.get("alignment_score", bertscore.get("f1", 0.5))
+    nli_alignment = alignment.get("alignment_score", alignment.get("f1", 0.5))
     hallu_report = await asyncio.to_thread(
         verify_claims,
         reasoned_output,
         rag_output,
         query,
-        bertscore["f1"],
+        alignment["f1"],
         nli_alignment,
     )
 
@@ -303,7 +305,7 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
         query_category="REASONING",
         llm_output=llm_output,
         rag_output=rag_output,
-        bertscore=bertscore,
+        alignment_score=alignment,
         claim_verdicts=[
             ClaimVerdictSchema(
                 claim=cv.claim,
@@ -376,7 +378,7 @@ async def _handle_factual(query: str) -> GenerateResponse:
         logger.info("── Node 4: Building tree index, retrieving context…")
         eval_result = await run_pageindex_rag_with_bertscore(md_path, query, llm_output)
         rag_output = eval_result["rag_output"]
-        bertscore = eval_result["bertscore"]
+        alignment = eval_result["alignment_score"]
         tree = eval_result.get("tree")  # for reuse by the RLM reasoner
 
         # ── Node 4.5: RLM reasoning (DISABLED on FACTUAL route) ──────
@@ -390,13 +392,13 @@ async def _handle_factual(query: str) -> GenerateResponse:
 
         # ── Node 5: Claim-Level Verification ─────────────────────────
         logger.info("── Node 5: Claim extraction + NLI verification…")
-        nli_alignment = bertscore.get("alignment_score", bertscore.get("f1", 0.0))
+        nli_alignment = alignment.get("alignment_score", alignment.get("f1", 0.0))
         hallu_report = await asyncio.to_thread(
             verify_claims,
             reasoned_output,
             rag_output,
             query,
-            bertscore["f1"],
+            alignment["f1"],
             nli_alignment,
         )
         report_dict = hallu_report.to_dict()
@@ -512,9 +514,9 @@ async def _handle_factual(query: str) -> GenerateResponse:
 
         # ── Node 7: Final Output ─────────────────────────────────────
         logger.info(
-            "═══════ Pipeline complete | hallu_score=%.4f | BERTScore F1=%.4f ═══════",
+            "═══════ Pipeline complete | hallu_score=%.4f | alignment F1=%.4f ═══════",
             hallu_report.hallucination_score,
-            bertscore["f1"],
+            alignment["f1"],
         )
 
         return GenerateResponse(
@@ -522,7 +524,7 @@ async def _handle_factual(query: str) -> GenerateResponse:
             query_category="FACTUAL",
             llm_output=llm_output,
             rag_output=rag_output,
-            bertscore=bertscore,
+            alignment_score=alignment,
             claim_verdicts=[
                 ClaimVerdictSchema(
                     claim=cv.claim,

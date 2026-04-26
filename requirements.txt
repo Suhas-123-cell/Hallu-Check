@@ -34,6 +34,7 @@ google-genai>=0.5.0
 
 # ── Web Search & Scraping ────────────────────
 googlesearch-python>=1.2.3
+duckduckgo-search>=7.0.0
 httpx>=0.27.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
@@ -52,6 +53,8 @@ datasets>=2.19.0
 accelerate>=0.30.0
 evaluate>=0.4.0
 scikit-learn>=1.4.0
+torch>=2.2.0
+numpy>=1.26.0
 
 # ── Utilities ────────────────────────────────
 aiofiles>=23.2.1
@@ -61,4 +64,11 @@ tenacity>=8.3.0
 # Pinned to 5.x for compatibility with google-ai-generativelanguage
 # and to avoid C extension issues on Python 3.14
 protobuf>=5.28.0,<6.0.0
+
+# ── EGV (Execution-Grounded Verification) ──
+sympy>=1.13.0
+
+# ── Benchmarks (optional, for eval_humaneval_egv) ──
+tqdm>=4.66.0
+pandas>=2.2.0
 

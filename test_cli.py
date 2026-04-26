@@ -203,7 +203,7 @@ def _process_query(query: str) -> None:
 
         # ── BERTScore ──────────────────────────────────────────────────
         print(f"\n  {'─' * 56}")
-        bs = data["bertscore"]
+        bs = data["alignment_score"]
         print(f"  {BOLD}📊 BERTScore:{RESET}")
         print(f"     F1: {bs['f1']:.4f}  |  Precision: {bs['precision']:.4f}  |  Recall: {bs['recall']:.4f}")
 

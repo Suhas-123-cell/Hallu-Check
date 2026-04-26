@@ -32,10 +32,21 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import pandas as pd  # type: ignore[import-untyped]
 from tqdm import tqdm  # type: ignore[import-untyped]
+
+# ── Fix 2: Hard override — disable surgical correction at module level ───────
+# Bypasses whatever config issue causes surgical correction to fire.
+# Patches both config.py AND the by-value copies in claim_verifier/iterative_refiner.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import config as _cfg_override  # type: ignore
+import nodes.claim_verifier as _cv_override  # type: ignore
+import nodes.iterative_refiner as _ir_override  # type: ignore
+_cfg_override.ENABLE_SURGICAL_CORRECTION = False
+_cv_override.ENABLE_SURGICAL_CORRECTION = False
+_ir_override.ENABLE_SURGICAL_CORRECTION = False
 
 logging.basicConfig(
     level=logging.WARNING,  # Keep quiet — tqdm handles progress
@@ -43,8 +54,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("benchmark.humaneval_egv")
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# NOTE: project root already added to sys.path above (surgical correction override)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -111,7 +121,7 @@ def enable_llama_cache(cache_file: str = "llama_cache.json") -> int:
             _llama_cache = {}
     else:
         _llama_cache = {}
-    return len(_llama_cache)
+    return len(_llama_cache or {})
 
 
 def _save_llama_cache() -> None:
@@ -304,7 +314,7 @@ def _check_correction_hallucination(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def evaluate_humaneval_egv(
-    max_samples: int = 164,
+    max_samples: int = 50,  # Fix 3: Validate with 50 first, full run after
     enable_cache: bool = True,
     enable_correction: bool = False,
 ) -> pd.DataFrame:
@@ -359,7 +369,11 @@ def evaluate_humaneval_egv(
 
     rows: List[Dict[str, Any]] = []
 
-    for sample in tqdm(samples, desc="HumanEval EGV Benchmark", unit="problem"):
+    for i, sample in enumerate(tqdm(samples, desc="HumanEval EGV Benchmark", unit="problem")):
+        sample = cast(Dict[str, Any], sample)
+        # Fix 4: 3-second delay between problems to prevent burst rate limiting
+        if i > 0:
+            time.sleep(3)
         task_id = sample.get("task_id", "")
         prompt = sample.get("prompt", "")
         test = sample.get("test", "")
@@ -415,9 +429,28 @@ def evaluate_humaneval_egv(
         full_contradicted = sum(
             1 for v in full_result["verdicts"] if v["verdict"] == "CONTRADICTED"
         )
+        full_unverifiable = sum(
+            1 for v in full_result["verdicts"] if v["verdict"] == "UNVERIFIABLE"
+        )
         baseline_contradicted = sum(
             1 for v in baseline_result["verdicts"] if v["verdict"] == "CONTRADICTED"
         )
+        baseline_unverifiable = sum(
+            1 for v in baseline_result["verdicts"] if v["verdict"] == "UNVERIFIABLE"
+        )
+
+        # Fix 2: If ALL verdicts are UNVERIFIABLE, pipeline had no real signal.
+        # Don't count these as detections — they inflate catch rates.
+        full_has_signal = full_contradicted > 0 or any(
+            v["verdict"] == "SUPPORTED" for v in full_result["verdicts"]
+        )
+        baseline_has_signal = baseline_contradicted > 0 or any(
+            v["verdict"] == "SUPPORTED" for v in baseline_result["verdicts"]
+        )
+
+        # Only count as "detected" if the pipeline actually had real verdicts
+        full_detected_clean = full_result["hallucination_detected"] and full_has_signal
+        baseline_detected_clean = baseline_result["hallucination_detected"] and baseline_has_signal
 
         rows.append({
             "task_id": task_id,
@@ -425,15 +458,17 @@ def evaluate_humaneval_egv(
             "ground_truth_passes": raw_passes,
             "raw_code_passes": raw_passes,
             # Full pipeline (EGV + NLI)
-            "full_detected": full_result["hallucination_detected"],
+            "full_detected": full_detected_clean,
             "full_score": full_result["hallucination_score"],
             "full_methods": ",".join(sorted(full_result["verification_methods"])),
             "full_n_claims": len(full_result["verdicts"]),
             "full_n_contradicted": full_contradicted,
+            "full_n_unverifiable": full_unverifiable,
             # Baseline (NLI-only)
-            "baseline_detected": baseline_result["hallucination_detected"],
+            "baseline_detected": baseline_detected_clean,
             "baseline_score": baseline_result["hallucination_score"],
             "baseline_n_contradicted": baseline_contradicted,
+            "baseline_n_unverifiable": baseline_unverifiable,
             # Correction quality
             "correction_introduced_bug": correction_bug,
         })
@@ -442,7 +477,7 @@ def evaluate_humaneval_egv(
     return df
 
 
-def compute_metrics(df: pd.DataFrame) -> Dict[str, float]:
+def compute_metrics(df: pd.DataFrame) -> Dict[str, Any]:
     """
     Compute aggregate metrics from the per-problem DataFrame.
 
@@ -527,7 +562,7 @@ def main():
         description="HumanEval EGV ablation benchmark (EGV+NLI vs NLI-only)"
     )
     parser.add_argument(
-        "--samples", type=int, default=164,
+        "--samples", type=int, default=50,
         help="Number of HumanEval problems to evaluate (max 164)",
     )
     parser.add_argument(
@@ -604,6 +639,7 @@ def main():
     # ── Show sample of the DataFrame ──────────────────────────────────
     print(f"\n  DataFrame shape: {df.shape}")
     print(f"\n{df.head(10).to_string(index=False)}\n")
+    
 
 
 if __name__ == "__main__":

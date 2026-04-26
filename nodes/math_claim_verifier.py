@@ -30,7 +30,7 @@ _EVAL_TIMEOUT = 10  # seconds — symbolic simplification can be slow
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Gemini — extract equation / assertion
+# LLM — extract equation / assertion (local Ollama, Gemini fallback)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _EXTRACT_PROMPT = """\
@@ -70,21 +70,48 @@ If the claim has no verifiable math:
 
 def _extract_math_from_claim(claim: str) -> Optional[Dict[str, str]]:
     """
-    Ask Gemini to extract the mathematical content from a claim.
+    Extract the mathematical content from a claim using local LLM (Ollama).
 
+    Falls back to Gemini if Ollama is unavailable.
     Returns a dict with keys: extractable, expression, claimed_value,
-    verification_type.  Returns None if Gemini is unavailable.
+    verification_type.  Returns None if all LLMs fail.
     """
-    try:
-        from nodes.claim_verifier import _gemini_generate  # type: ignore[import-not-found]
-    except ImportError:
-        logger.warning("math_claim_verifier | Cannot import _gemini_generate.")
-        return None
-
     prompt = _EXTRACT_PROMPT.format(claim=claim[:500])
-    raw = _gemini_generate(prompt)
+
+    raw = ""
+
+    # ── Primary: Local LLM via Ollama ────────────────────────────────────
+    try:
+        from nodes.local_llm import chat_completion, is_available  # type: ignore[import-not-found]
+        if is_available():
+            raw = chat_completion(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a precise math extraction system. "
+                            "Always respond with ONLY valid JSON. "
+                            "No explanations, no markdown fences."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=256,
+                temperature=0.0,
+            )
+    except Exception as e:
+        logger.warning("math_claim_verifier | Local LLM failed: %s", str(e)[:100])
+
+    # ── Fallback: Gemini ─────────────────────────────────────────────────
     if not raw:
-        logger.warning("math_claim_verifier | Gemini returned empty response.")
+        try:
+            from nodes.claim_verifier import _gemini_generate  # type: ignore[import-not-found]
+            raw = _gemini_generate(prompt)
+        except Exception as e:
+            logger.warning("math_claim_verifier | Gemini fallback failed: %s", str(e)[:100])
+
+    if not raw:
+        logger.warning("math_claim_verifier | All LLMs returned empty response.")
         return None
 
     # ── Parse JSON ───────────────────────────────────────────────────
@@ -98,7 +125,7 @@ def _extract_math_from_claim(claim: str) -> Optional[Dict[str, str]]:
         except json.JSONDecodeError:
             continue
 
-    logger.warning("math_claim_verifier | Failed to parse Gemini extraction response.")
+    logger.warning("math_claim_verifier | Failed to parse LLM extraction response.")
     return None
 
 
@@ -246,10 +273,10 @@ def _run_sympy_verification(
 
 def verify_math_claim(claim: str) -> Dict[str, Any]:
     """
-    Verify a math-related claim using Gemini extraction + SymPy evaluation.
+    Verify a math-related claim using LLM extraction + SymPy evaluation.
 
     Pipeline:
-      1. Gemini extracts the equation / assertion as SymPy-parseable strings.
+      1. Local LLM (Ollama) extracts the equation / assertion as SymPy strings.
       2. SymPy evaluates and simplifies in an isolated subprocess.
       3. The computed result is compared against the claimed value.
 
@@ -265,7 +292,7 @@ def verify_math_claim(claim: str) -> Dict[str, Any]:
     if not claim or not claim.strip():
         return {"verdict": "UNKNOWN", "computed": None}
 
-    # ── Step 1: Extract math via Gemini ───────────────────────────────
+    # ── Step 1: Extract math via local LLM ────────────────────────────
     extraction = _extract_math_from_claim(claim)
     if extraction is None:
         logger.warning("math_claim_verifier | Gemini extraction failed.")

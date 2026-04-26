@@ -461,7 +461,7 @@ async def run_pageindex_rag_with_bertscore(
         lang: (DEPRECATED) Ignored — kept for backward compatibility.
         model_type: (DEPRECATED) Ignored — kept for backward compatibility.
     Returns:
-        Dict with 'rag_output' and 'bertscore' (precision, recall, f1,
+        Dict with 'rag_output' and 'alignment_score' (precision, recall, f1,
         alignment_score, method).
     """
     tree = await build_tree_index(md_path)
@@ -470,4 +470,4 @@ async def run_pageindex_rag_with_bertscore(
     # `tree` is returned so callers (e.g. the RLM reasoner) can issue
     # additional targeted sub-question queries against the same tree
     # without paying to rebuild it. Existing callers can ignore this key.
-    return {"rag_output": rag_output, "bertscore": alignment, "tree": tree}
+    return {"rag_output": rag_output, "alignment_score": alignment, "tree": tree}
