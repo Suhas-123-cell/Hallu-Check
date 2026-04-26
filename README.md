@@ -43,42 +43,50 @@ flowchart TD
     Q(["User Query"]) --> G{"Gatekeeper"}
 
     G -->|FACTUAL| LLM["Llama 3.2-1B Generator"]
-    G -->|REASONING| LLM
+  G -->|REASONING| RS["Reasoning Subtype Classifier"]
     G -->|CHITCHAT| LLM
 
     LLM -->|chitchat| OUT(["Final Answer"])
 
-    LLM -->|reasoning| RLM["RLM Reasoner"]
-    RLM --> NLI
+  RS -->|REASONING_LOGIC| RLM["RLM Reasoner"]
+  RS -->|REASONING_CODE / MATH| EGV["Execution Verifier"]
+  RLM --> CV
+  EGV --> CV
 
     LLM -->|factual| SC["Self-Consistency Check"]
     SC --> KW["Keyword Extractor"]
     KW --> WS["Web Search + C-RAG"]
-    WS --> RAG["PageIndex RAG"]
-    RAG --> NLI["Claim Verifier — DeBERTa NLI"]
+  WS --> RAG["PageIndex RAG + Alignment Score"]
+  RAG --> CV["Claim Verifier"]
 
-    NLI -->|"clean"| OUT
-    NLI -->|"hallucinated"| REF["Refiner — Gemini 2.5 Flash"]
-    NLI -->|"unverifiable"| GAP["Gap Recovery Search"]
+  CV --> CR["Claim Classifier\n(factual/code/math)"]
+  CR --> NLI["NLI Verifier (factual)"]
+  CR --> EGV2["EGV Code/Math Verifier"]
+  NLI --> AGG["Hallucination Aggregator"]
+  EGV2 --> AGG
+
+  AGG -->|"clean"| OUT
+  AGG -->|"hallucinated"| REF["Refiner / ICR"]
+  AGG -->|"unverifiable"| GAP["Gap Recovery Search"]
     GAP --> REF
 
     REF --> OUT
 ```
 
-  ### 8-Node Pipeline (explicit map)
+### 8-Node Pipeline (explicit map)
 
-  This project is organized as an 8-node agentic pipeline (including the Gatekeeper):
+This project is organized as an 8-node agentic pipeline (including the Gatekeeper):
 
-  1. **Node 0 — Gatekeeper**: classify route (`FACTUAL` / `REASONING` / `CHITCHAT`)
-  2. **Node 1 — Generator**: produce first-pass answer (small LLM)
-  3. **Node 1.5 — Self-Consistency / RLM**: route-dependent stabilization
-  4. **Node 2 — Keyword Extraction**: build search query terms (FACTUAL)
-  5. **Node 3 — Web Search + Scrape**: depth-2 crawl + C-RAG filtering
-  6. **Node 4 — PageIndex RAG**: tree retrieval + NLI alignment scoring
-  7. **Node 5 — Claim Verification**: atomic-claim verdicts (`SUPPORTED`/`CONTRADICTED`/`UNVERIFIABLE`)
-  8. **Node 6 — Refinement**: iterative/surgical correction when hallucination is detected
+1. **Node 0 — Gatekeeper**: classify route (`FACTUAL` / `REASONING` / `CHITCHAT`)
+2. **Node 1 — Generator**: produce first-pass answer (small LLM)
+3. **Node 1.5 — Self-Consistency / RLM**: route-dependent stabilization (`FACTUAL` uses self-consistency, `REASONING_LOGIC` may use RLM)
+4. **Node 2 — Keyword Extraction**: build search query terms (FACTUAL)
+5. **Node 3 — Web Search + Scrape**: depth-2 crawl + C-RAG filtering
+6. **Node 4 — PageIndex RAG**: tree retrieval + `alignment_score` computation
+7. **Node 5 — Claim Verification**: extract claims, classify each as factual/code/math, route to NLI or EGV, aggregate verdicts
+8. **Node 6 — Refinement**: iterative/surgical correction when hallucination is detected
 
-  Final answer emission happens after Node 6 (or earlier for CHITCHAT).
+**Node 7** is the final response emission stage (or immediate return for CHITCHAT).
 
 ### Three Routes — One Shared Brain
 
@@ -135,11 +143,12 @@ Query: "Who is the Chief Minister of Andhra Pradesh?"
     │  Compose final answer from sub-answers       │
     └─────────────┬──────────────────────────────┘
               │
-    ┌── Node 5: Claim Verifier ──────────────────┐
-    │  Gemini extracts atomic claims               │
-    │  DeBERTa NLI verifies each vs RAG context   │
-    │  Score = 0.7×claims + 0.3×(1−NLI alignment) │
-    └─────────────┬──────────────────────────────┘
+    ┌── Node 5: Claim Verifier ───────────────────────────────┐
+    │  Extract atomic claims                                   │
+    │  claim_classifier routes each claim → factual/code/math  │
+    │  factual → NLI, code/math → EGV                          │
+    │  Score = 0.7×claims + 0.3×(1−alignment_score)            │
+    └─────────────┬────────────────────────────────────────────┘
               │
     ┌── Node 5.5: Knowledge Gap Recovery ────────┐
     │  UNVERIFIABLE claims → targeted search      │
@@ -156,7 +165,10 @@ Query: "Who is the Chief Minister of Andhra Pradesh?"
     └─────┬──────┘     │
           └──────┬─────┘
                  │
-           Final Answer
+        ┌── Node 7: Final Output ─────────────────────┐
+        │  Return response with alignment_score,       │
+        │  claim_verdicts, hallucination metrics       │
+        └───────────────────────────────────────────────┘
 ```
 
 ---
