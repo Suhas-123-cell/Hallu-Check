@@ -81,23 +81,58 @@ def _extract_code(llm_output: str) -> str:
 
     Priority:
     1. Fenced ```python blocks
-    2. Bare function definitions
+    2. Bare function definitions (with nested function support)
     3. Any indented code blocks
+
+    Always returns dedented code (column 0).
     """
+    import textwrap as _tw
+
     # Try fenced code blocks first
     blocks = _CODE_BLOCK_RE.findall(llm_output)
     if blocks:
-        return blocks[0].strip()
+        return _tw.dedent(blocks[0]).strip()
 
-    # Try bare function definitions
-    funcs = _FUNCTION_DEF_RE.findall(llm_output)
-    if funcs:
-        return funcs[0].strip()
+    # Try bare function definitions — capture the full function
+    # including nested defs by tracking indentation
+    lines = llm_output.split("\n")
+    func_start = None
+    func_lines: list[str] = []
+    base_indent = 0
+
+    for i, line in enumerate(lines):
+        if func_start is None:
+            # Look for a top-level def
+            m = re.match(r"^(\s*)def\s+\w+\s*\(", line)
+            if m:
+                func_start = i
+                base_indent = len(m.group(1))
+                func_lines = [line]
+        else:
+            stripped = line.strip()
+            # Continue if: blank line, or indented more than base
+            if stripped == "":
+                func_lines.append(line)
+            elif len(line) - len(line.lstrip()) > base_indent:
+                func_lines.append(line)
+            elif line.lstrip().startswith("def ") and len(line) - len(line.lstrip()) == base_indent:
+                # Same-level def — this is a sibling function, stop
+                break
+            else:
+                # Line at base indent or less that isn't a def — stop
+                break
+
+    if func_lines:
+        # Strip trailing blank lines
+        while func_lines and func_lines[-1].strip() == "":
+            func_lines.pop()
+        if func_lines:
+            return _tw.dedent("\n".join(func_lines)).strip()
 
     # Try indented blocks (4+ spaces or tab)
     indented_lines = []
     in_block = False
-    for line in llm_output.split("\n"):
+    for line in lines:
         if line.startswith("    ") or line.startswith("\t"):
             indented_lines.append(line)
             in_block = True
@@ -110,7 +145,7 @@ def _extract_code(llm_output: str) -> str:
             indented_lines = []
 
     if len(indented_lines) >= 3:
-        return "\n".join(indented_lines).strip()
+        return _tw.dedent("\n".join(indented_lines)).strip()
 
     return ""
 
@@ -333,13 +368,15 @@ def _run_test(
     timeout: int = 10,
 ) -> TestResult:
     """Run a single test case against the extracted code."""
-    test_code = textwrap.dedent(f"""\
-        {code}
-
-        # --- Test execution ---
-        result = {func_name}({test_case.input_args})
-        print(repr(result))
-    """)
+    # Dedent the code first so it starts at column 0,
+    # then concatenate (never embed multi-line code inside textwrap.dedent)
+    clean_code = textwrap.dedent(code)
+    test_code = (
+        f"{clean_code}\n\n"
+        f"# --- Test execution ---\n"
+        f"result = {func_name}({test_case.input_args})\n"
+        f"print(repr(result))\n"
+    )
 
     try:
         exec_result = run_python(test_code)

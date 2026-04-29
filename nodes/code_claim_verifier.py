@@ -333,6 +333,9 @@ def _run_single_test(
     Returns a dict with keys: stdout, stderr, ok, error.
     """
     # Build the full script that the subprocess will execute
+    # Dedent so class-wrapped or indented code starts at column 0
+    import textwrap as _tw
+    clean_code = _tw.dedent(code)
     script = (
         "import math, fractions, decimal, statistics, itertools, functools\n"
         "try:\n"
@@ -340,7 +343,7 @@ def _run_single_test(
         "except ImportError:\n"
         "    sympy = None\n"
         "\n"
-        f"{code}\n"
+        f"{clean_code}\n"
         "\n"
         f"_result_ = {func_name}({test_input})\n"
         "print(repr(_result_))\n"
@@ -582,7 +585,8 @@ def verify_code_claim(
                 "error": submitted_error,
             })
             logger.info(
-                "code_claim_verifier | Test %d FAIL (error): %s", i + 1, submitted_error
+                "code_claim_verifier | Test %d FAIL (error): %s | stderr: %s",
+                i + 1, submitted_error, submitted_actual[:120],
             )
         elif submitted_pass and is_crash_test:
             # Crash test passed — function ran without error

@@ -1,13 +1,3 @@
-"""
-hallu-check | test_cli.py
-Interactive CLI to test the Hallu-Check pipeline with claim-level
-hallucination detection.
-
-Usage:
-  1. Start the server:   uvicorn main:app
-  2. Run this script:    python test_cli.py
-  3. For large inputs:   python test_cli.py --file query.txt
-"""
 
 import os
 import sys
@@ -24,19 +14,19 @@ API_URL = "http://127.0.0.1:8000/generate"
 
 # ── Verdict display config ───────────────────────────────────────────────────
 VERDICT_ICONS = {
-    "SUPPORTED":          "✅",
-    "CONTRADICTED":       "❌",
-    "UNVERIFIABLE":       "⚠️ ",
-    "NO_CLAIM":           "💬",
-    "HONEST_UNCERTAINTY": "🤷",
+    "SUPPORTED":          "+",
+    "CONTRADICTED":       "x",
+    "UNVERIFIABLE":       "?",
+    "NO_CLAIM":           "-",
+    "HONEST_UNCERTAINTY": "~",
 }
 
 VERDICT_COLORS = {
-    "SUPPORTED":          "\033[92m",   # green
-    "CONTRADICTED":       "\033[91m",   # red
-    "UNVERIFIABLE":       "\033[93m",   # yellow
-    "NO_CLAIM":           "\033[90m",   # gray
-    "HONEST_UNCERTAINTY": "\033[96m",   # cyan
+    "SUPPORTED":          "\033[92m",   
+    "CONTRADICTED":       "\033[91m",   
+    "UNVERIFIABLE":       "\033[93m",   
+    "NO_CLAIM":           "\033[90m",   
+    "HONEST_UNCERTAINTY": "\033[96m",   
 }
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -50,24 +40,24 @@ def _truncate(text: str, max_len: int = 120) -> str:
 
 
 def print_header():
-    print(f"\n{BOLD}{'═' * 64}")
-    print("  🔍 Hallu-Check v3.0 — Claim-Level Hallucination Detection")
-    print(f"{'═' * 64}{RESET}")
-    print(f"  {DIM}Type 'exit' or 'quit' to stop.{RESET}\n")
+    print(f"\n{BOLD}{'=' * 64}")
+    print("  hallu-correct v3.0 - claim-level hallucination detection")
+    
+    print(f"  {DIM}type 'exit' or 'quit' to stop.{RESET}\n")
 
 
 def print_claim_verdicts(verdicts: list):
     """Display per-claim verdicts with icons and evidence."""
     if not verdicts:
-        print(f"\n  {DIM}No factual claims detected.{RESET}")
+        print(f"\n  {DIM}no factual claims detected.{RESET}")
         return
 
-    print(f"\n  {BOLD}📋 Claim-by-Claim Analysis:{RESET}")
+    print(f"\n  {BOLD}claim-by-claim analysis:{RESET}")
     print(f"  {'─' * 56}")
 
     for i, v in enumerate(verdicts, 1):
         verdict = v.get("verdict", "UNKNOWN")
-        icon = VERDICT_ICONS.get(verdict, "❓")
+        icon = VERDICT_ICONS.get(verdict, "?")
         color = VERDICT_COLORS.get(verdict, "")
         claim = _truncate(v.get("claim", ""), 100)
         evidence = _truncate(v.get("evidence", ""), 100)
@@ -75,11 +65,11 @@ def print_claim_verdicts(verdicts: list):
         confidence = v.get("confidence", 0.0)
 
         print(f"  {color}{icon} [{verdict}]{RESET} (conf: {confidence:.0%})")
-        print(f"     Claim:    {claim}")
+        print(f"     claim:    {claim}")
         if evidence and verdict != "NO_CLAIM":
-            print(f"     {DIM}Evidence: {evidence}{RESET}")
+            print(f"     {DIM}evidence: {evidence}{RESET}")
         if reasoning:
-            print(f"     {DIM}Reasoning: {reasoning}{RESET}")
+            print(f"     {DIM}reasoning: {reasoning}{RESET}")
         print()
 
 
@@ -90,42 +80,33 @@ def print_hallucination_score(score: float, detected: bool):
     empty = bar_len - filled
 
     if score < 0.3:
-        bar_color = "\033[92m"  # green
+        bar_color = "\033[92m"  
     elif score < 0.6:
-        bar_color = "\033[93m"  # yellow
+        bar_color = "\033[93m"  
     else:
-        bar_color = "\033[91m"  # red
+        bar_color = "\033[91m"  
 
     bar = f"{bar_color}{'█' * filled}{'░' * empty}{RESET}"
-    status = f"{BOLD}\033[91mHALLUCINATION DETECTED{RESET}" if detected else f"{BOLD}\033[92mNO HALLUCINATION{RESET}"
+    status = f"{BOLD}\033[91mhallucination detected{RESET}" if detected else f"{BOLD}\033[92mno hallucination{RESET}"
 
-    print(f"  🎯 Hallucination Score: [{bar}] {score:.2f}")
-    print(f"     Status: {status}")
+    print(f"  hallucination score: [{bar}] {score:.2f}")
+    print(f"     status: {status}")
 
 
 def _read_query_interactive() -> str | None:
-    """
-    Read a (possibly multi-line) query from the terminal.
-
-    Uses sys.stdin.read() which captures ALL pasted text in a single call
-    (no per-line processing) until Ctrl+D (EOF). After reading, reopens
-    /dev/tty so the next call to this function works.
-
-    Returns the query string, or None to signal exit.
-    """
-    print(f"\n  {BOLD}📝 Enter your query (type or paste, then press Ctrl+D to submit):{RESET}")
+    
+    print(f"\n  {BOLD}enter your query (type or paste, then press ctrl+d to submit):{RESET}")
     try:
         query = sys.stdin.read().strip()
     except KeyboardInterrupt:
-        print("\n  Exiting...")
+        print("\n  exiting...")
         return None
 
-    # After Ctrl+D, stdin is at EOF. Reopen it from the terminal
-    # so subsequent reads work in the interactive loop.
+    
     try:
         sys.stdin = open("/dev/tty", "r")
     except OSError:
-        pass  # Non-TTY environment (piped input); stdin stays as-is
+        pass  
 
     return query
 
@@ -135,14 +116,14 @@ def main():
     if len(sys.argv) >= 3 and sys.argv[1] == "--file":
         filepath = sys.argv[2]
         if not os.path.isfile(filepath):
-            print(f"  ❌ File not found: {filepath}")
+            print(f"  file not found: {filepath}")
             sys.exit(1)
         with open(filepath, "r") as f:
             query = f.read().strip()
         if not query:
-            print("  ❌ File is empty.")
+            print("  file is empty.")
             sys.exit(1)
-        print(f"  📄 Read {len(query)} chars from {filepath}")
+        print(f"  read {len(query)} chars from {filepath}")
         _process_query(query)
         return
 
@@ -158,7 +139,7 @@ def main():
             continue
 
         if query.lower() in ("exit", "quit"):
-            print("  Goodbye! 👋")
+            print("  goodbye!")
             break
 
         _process_query(query)
@@ -166,7 +147,7 @@ def main():
 
 def _process_query(query: str) -> None:
     """Send query to the pipeline API and display results."""
-    print(f"\n  ⏳ Processing pipeline (this may take 10-60 seconds)...")
+    print(f"\n  processing pipeline (this may take 10-60 seconds)...")
     start_time = time.time()
     response = None
     try:
@@ -176,19 +157,17 @@ def _process_query(query: str) -> None:
         elapsed = time.time() - start_time
 
         if elapsed > 60:
-            print(f"\n  ⚠️  Pipeline took {elapsed:.1f}s (longer than usual).")
+            print(f"\n  pipeline took {elapsed:.1f}s (longer than usual).")
         else:
-            print(f"\n  ✅ Pipeline completed in {elapsed:.1f}s")
+            print(f"\n  pipeline completed in {elapsed:.1f}s")
 
         # ── Gatekeeper Classification ─────────────────────────────────
         category = data.get("query_category", "UNKNOWN")
-        category_icons = {"FACTUAL": "🔍", "REASONING": "🧠", "CHITCHAT": "💬"}
-        cat_icon = category_icons.get(category, "❓")
-        print(f"\n  {cat_icon} Route: {BOLD}{category}{RESET}")
+        print(f"\n  route: {BOLD}{category}{RESET}")
 
         # ── Qwen's Original Output ─────────────────────────────────────
         print(f"\n  {'─' * 56}")
-        print(f"  {BOLD}🔹 Qwen's Original Output:{RESET}")
+        print(f"  {BOLD}qwen's original output:{RESET}")
         llm_out = data["llm_output"]
         for line in llm_out.split("\n"):
             print(f"     {line}")
@@ -197,14 +176,14 @@ def _process_query(query: str) -> None:
         print(f"\n  {'─' * 56}")
         rag_out = data["rag_output"]
         rag_preview = rag_out[:400] + "…" if len(rag_out) > 400 else rag_out
-        print(f"  {BOLD}🔹 RAG Context (PageIndex):{RESET}")
+        print(f"  {BOLD}rag context (pageindex):{RESET}")
         for line in rag_preview.split("\n")[:8]:
             print(f"     {DIM}{line}{RESET}")
 
         # ── BERTScore ──────────────────────────────────────────────────
         print(f"\n  {'─' * 56}")
         bs = data["alignment_score"]
-        print(f"  {BOLD}📊 BERTScore:{RESET}")
+        print(f"  {BOLD}alignment score:{RESET}")
         print(f"     F1: {bs['f1']:.4f}  |  Precision: {bs['precision']:.4f}  |  Recall: {bs['recall']:.4f}")
 
         # ── Claim-Level Verdicts ───────────────────────────────────────
@@ -221,29 +200,29 @@ def _process_query(query: str) -> None:
         # ── Summary ───────────────────────────────────────────────────
         summary = data.get("hallucination_summary", "")
         if summary:
-            print(f"\n  📄 Summary: {summary}")
+            print(f"\n  summary: {summary}")
 
         # ── Final Answer ───────────────────────────────────────────────
         print(f"\n  {'─' * 56}")
-        print(f"  {BOLD}🏁 Final Answer:{RESET}")
+        print(f"  {BOLD}final answer:{RESET}")
         for line in data["final_answer"].split("\n"):
             print(f"     {line}")
 
         print(f"\n{'═' * 64}\n")
 
     except requests.exceptions.ConnectionError:
-        print(f"\n  ❌ Error: Cannot connect to the API.")
-        print("  Please make sure the server is running:")
+        print(f"\n  error: cannot connect to the api.")
+        print("  please make sure the server is running:")
         print("    source .venv/bin/activate")
         print("    uvicorn main:app --reload")
     except requests.exceptions.Timeout:
-        print(f"\n  ❌ Error: The request timed out.")
+        print(f"\n  error: the request timed out.")
     except requests.exceptions.HTTPError as err:
-        print(f"\n  ❌ API Error: {err}")
+        print(f"\n  api error: {err}")
         if response:
-            print(f"  Details: {response.text[:500]}")
+            print(f"  details: {response.text[:500]}")
     except Exception as e:
-        print(f"\n  ❌ Unexpected error: {e}")
+        print(f"\n  unexpected error: {e}")
 
 
 if __name__ == "__main__":

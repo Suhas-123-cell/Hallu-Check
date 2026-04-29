@@ -437,6 +437,9 @@ def _extract_claims(llm_output: str, query: str = "") -> List[str]:
     ("U.S.", "Dr.", "e.g.") and created phantom sentence fragments that
     weren't in the original text. NLTK sent_tokenize handles these correctly.
 
+    For code-heavy outputs, fenced code blocks are stripped before tokenization
+    so only the prose explanations are extracted as verifiable claims.
+
     After extraction, _validate_claims() checks that every extracted claim
     is actually grounded in the original LLM output (word overlap ≥ 60%).
     This catches any fragments that get corrupted during splitting.
@@ -448,14 +451,26 @@ def _extract_claims(llm_output: str, query: str = "") -> List[str]:
     if not llm_output or len(llm_output.strip()) < 10:
         return []
 
+    # Strip fenced code blocks before tokenization — code fragments are
+    # not verifiable claims and confuse sentence splitting.
+    prose_only = re.sub(r"```[\s\S]*?```", "", llm_output)
+
+    # Also strip inline code spans (`...`)
+    prose_only = re.sub(r"`[^`]+`", "", prose_only)
+
+    # If stripping removed everything, there are no prose claims
+    if len(prose_only.strip()) < 20:
+        logger.info("Node 5 | LLM output is code-only — no prose claims to extract.")
+        return []
+
     # Use NLTK sent_tokenize for robust sentence boundary detection.
     # Falls back to regex if NLTK data is not available.
     try:
         from nltk.tokenize import sent_tokenize  # type: ignore[import-untyped]
-        sentences = sent_tokenize(llm_output)
+        sentences = sent_tokenize(prose_only)
     except Exception:
         # Fallback: split on sentence-ending punctuation followed by space+uppercase
-        sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z])', llm_output)
+        sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z])', prose_only)
 
     # Filter: keep only sentences with meaningful content (≥5 words)
     sentences = [
@@ -464,15 +479,18 @@ def _extract_claims(llm_output: str, query: str = "") -> List[str]:
         if len(s.strip()) > 20 and len(s.strip().split()) >= 5
     ]
 
-    # Filter out meta-statements (not factual claims)
-    meta_phrases = [
-        "sure,", "here's", "i can help", "let me",
-        "based on", "according to", "in summary",
-        "i hope", "feel free", "let me know",
+    # Filter out meta-statements (not factual claims).
+    # Only match at sentence START to avoid false positives like
+    # "Here's an explanation" being caught by "here's".
+    meta_starts = [
+        "sure,", "here is ", "here's ", "i can help", "let me ",
+        "in summary", "i hope ", "feel free", "let me know",
+        "you can test", "you can use", "you can run",
+        "this code ", "this solution ", "this should ",
     ]
     claims = [
         s for s in sentences
-        if not any(meta in s.lower() for meta in meta_phrases)
+        if not any(s.lower().strip().startswith(meta) for meta in meta_starts)
     ]
 
     # Cap at 10 claims
@@ -1233,11 +1251,30 @@ def _verify_single_code_claim(
     the result dict into a ClaimVerdict.
     """
     import re as _re
+    import textwrap as _tw
 
     # Extract code snippet from LLM output for verification
+    # Strategy 1: Fenced ```python blocks
     code_block_re = _re.compile(r"```(?:python|py)?\s*\n([\s\S]*?)```", _re.IGNORECASE)
     blocks = code_block_re.findall(llm_output)
-    code_snippet = blocks[0].strip() if blocks else llm_output
+
+    if blocks:
+        code_snippet = blocks[0].strip()
+    else:
+        # Strategy 2: Extract bare function definitions (handles unfenced code)
+        func_re = _re.compile(
+            r"(def\s+\w+\s*\([^\)]*\)[^\n]*:\n(?:[ \t]+[^\n]*\n?)*)",
+            _re.MULTILINE,
+        )
+        funcs = func_re.findall(llm_output)
+        if funcs:
+            # Take the longest match (likely the main function with helpers)
+            code_snippet = max(funcs, key=len).strip()
+        else:
+            code_snippet = llm_output
+
+    # Always dedent so code starts at column 0 (handles class-wrapped code)
+    code_snippet = _tw.dedent(code_snippet)
 
     try:
         result = verify_fn(claim, code_snippet)

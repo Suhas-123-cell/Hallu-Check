@@ -173,14 +173,19 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
     llm_output = await asyncio.to_thread(generate_llm_output, query)
 
     # ── Node 1.5: Recursive Language Model reasoning (optional) ──────
+    # RLM only runs for REASONING_LOGIC. For CODE/MATH, the LLM's code
+    # output must be preserved — RLM's _compose step would summarize it
+    # into a brief answer (e.g., "2") destroying the code solution.
     reasoned_output = llm_output
-    if ENABLE_RLM_REASONING:
+    if ENABLE_RLM_REASONING and reasoning_subtype == "REASONING_LOGIC":
         logger.info("── Node 1.5: Recursive reasoning (RLM)…")
         try:
             reasoned_output = await recursive_reason(query, llm_output)
         except Exception as rlm_exc:
             logger.warning("── Node 1.5: RLM failed (%s) — using Node 1 output.", rlm_exc)
             reasoned_output = llm_output
+    elif reasoning_subtype != "REASONING_LOGIC":
+        logger.info("── Node 1.5: Skipping RLM for %s (EGV handles verification).", reasoning_subtype)
 
     # ── Synthetic context for reasoning queries ──────────────────────
     rag_output = "No external context required for reasoning/logic queries."
