@@ -1,24 +1,3 @@
-"""
-hallu-check | nodes/recursive_reasoner.py
-Node 1.5 — Recursive Language Model (RLM) Reasoner
-
-Pure Llama self-recursion — no extra Gemini calls.
-
-Pattern (MIT RLM, arxiv 2025):
-  1. DECOMPOSE  — root Llama breaks the query into 2-4 atomic sub-questions
-  2. SOLVE      — each sub-question is answered by a fresh Llama call (parallel),
-                  with its own small context so the model stops dropping state
-  3. COMPOSE    — root Llama synthesizes the final answer from the sub-answers,
-                  flagging any contradictions between them
-
-Why this helps REASONING queries:
-  Llama 3.2-1B's main failure mode is not raw capability — it's working-memory
-  loss across multi-step problems. Isolating each sub-step in its own context
-  window dramatically reduces that failure mode.
-
-Cost: zero extra paid API calls. Only additional free HF inference.
-Depth: capped at 1 level. Further recursion gives diminishing returns.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -63,7 +42,6 @@ def _client() -> InferenceClient:
 
 
 def _extract_json_array(text: str) -> List[str] | None:
-    """Pull the first JSON array of strings out of a model response."""
     # Prefer a fenced ```json block if present
     fenced = re.search(r"```(?:json)?\s*(\[[\s\S]*?\])\s*```", text)
     candidate = fenced.group(1) if fenced else None
@@ -85,7 +63,6 @@ def _extract_json_array(text: str) -> List[str] | None:
 # ── Step 1: DECOMPOSE ────────────────────────────────────────────────────────
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=8), reraise=True)
 def _decompose(query: str) -> List[str]:
-    """Ask Llama to split the query into atomic sub-questions."""
     system = (
         "You are a reasoning planner. Break the user's problem into the smallest "
         "number of independent sub-questions that, when answered, let you solve "
@@ -168,7 +145,6 @@ def _build_leaf_system(has_python: bool, has_rag: bool) -> str:
 
 
 def _exec_python_blocks(draft: str) -> tuple[str, int]:
-    """Execute <python> blocks and substitute results. Returns (text, count)."""
     blocks = _PYTHON_BLOCK_RE.findall(draft)
     if not blocks:
         return draft, 0
@@ -183,7 +159,6 @@ def _exec_python_blocks(draft: str) -> tuple[str, int]:
 
 
 def _exec_rag_blocks(draft: str, tree_query: TreeQueryFn) -> tuple[str, int]:
-    """Execute <rag> blocks against the shared tree. Returns (text, count)."""
     blocks = _RAG_BLOCK_RE.findall(draft)
     if not blocks:
         return draft, 0
@@ -209,15 +184,6 @@ def _exec_rag_blocks(draft: str, tree_query: TreeQueryFn) -> tuple[str, int]:
 
 
 def _solve_leaf(sub_question: str, tree_query: Optional[TreeQueryFn] = None) -> str:
-    """
-    Answer a single sub-question with a fresh, small context.
-
-    Two-pass protocol:
-      1. Draft — the model may emit <python>...</python> and/or <rag>...</rag>.
-      2. Tool execution — run each tool block, substitute the real results.
-      3. Finalize — the model reads its own substituted draft and writes the
-         clean final answer. Skipped if no tool blocks were emitted.
-    """
     has_python = True
     has_rag = tree_query is not None
     leaf_system = _build_leaf_system(has_python, has_rag)
@@ -291,7 +257,6 @@ async def _solve_leaves_parallel(
     sub_questions: List[str],
     tree_query: Optional[TreeQueryFn] = None,
 ) -> List[str]:
-    """Run all leaf calls concurrently via asyncio.to_thread."""
     tasks = [asyncio.to_thread(_solve_leaf, sq, tree_query) for sq in sub_questions]
     return await asyncio.gather(*tasks)
 
@@ -299,7 +264,6 @@ async def _solve_leaves_parallel(
 # ── Step 3: COMPOSE ──────────────────────────────────────────────────────────
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=8), reraise=True)
 def _compose(query: str, pairs: List[Tuple[str, str]], original_answer: str) -> str:
-    """Synthesize the final answer from sub-answers."""
     evidence_block = "\n\n".join(
         f"Sub-question {i}: {q}\nSub-answer {i}: {a if a else '[no answer produced]'}"
         for i, (q, a) in enumerate(pairs, 1)
@@ -341,19 +305,6 @@ async def recursive_reason(
     original_answer: str,
     tree_query: Optional[TreeQueryFn] = None,
 ) -> str:
-    """
-    Node 1.5 — Run one level of RLM recursion over the query.
-
-    Args:
-        query:           The user's original query.
-        original_answer: The single-shot answer from Node 1 (fallback + hint).
-        tree_query:      Optional callable(sub_q) → retrieved text. When
-                         provided (FACTUAL route), leaves can emit <rag>
-                         blocks to query the shared PageIndex tree.
-
-    Returns:
-        The composed answer, or the original answer on any failure.
-    """
     logger.info(
         "Node 1.5 | Recursive reasoning start (rag_tool=%s).",
         "on" if tree_query else "off",

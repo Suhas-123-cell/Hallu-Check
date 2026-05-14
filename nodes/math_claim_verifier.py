@@ -1,18 +1,3 @@
-"""
-hallu-check | nodes/math_claim_verifier.py
-Claim-Level Math Verification via SymPy
-
-Verifies a math-related claim by:
-  1. Asking Gemini to extract the equation / numerical assertion as a
-     SymPy-parseable string pair (lhs, rhs) or a single expression.
-  2. Evaluating it symbolically with ``sympy.simplify`` and, when
-     applicable, ``sympy.solve``.
-  3. Returning a structured verdict dict.
-
-This is a *claim*-level verifier (operates on a single extracted claim),
-complementing the existing ``execution_verifier.verify_math`` which
-operates on full LLM output with regex extraction.
-"""
 from __future__ import annotations
 
 import json
@@ -25,13 +10,10 @@ from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger("hallu-check.math_claim_verifier")
 
-# ── Subprocess timeout for SymPy evaluation ──────────────────────────────────
-_EVAL_TIMEOUT = 10  # seconds — symbolic simplification can be slow
+_EVAL_TIMEOUT = 10
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# LLM — extract equation / assertion (local Ollama, Gemini fallback)
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 _EXTRACT_PROMPT = """\
 You are a math extraction system. Given a natural-language math claim, extract \
@@ -69,13 +51,6 @@ If the claim has no verifiable math:
 
 
 def _extract_math_from_claim(claim: str) -> Optional[Dict[str, str]]:
-    """
-    Extract the mathematical content from a claim using local LLM (Ollama).
-
-    Falls back to Gemini if Ollama is unavailable.
-    Returns a dict with keys: extractable, expression, claimed_value,
-    verification_type.  Returns None if all LLMs fail.
-    """
     prompt = _EXTRACT_PROMPT.format(claim=claim[:500])
 
     raw = ""
@@ -102,13 +77,7 @@ def _extract_math_from_claim(claim: str) -> Optional[Dict[str, str]]:
     except Exception as e:
         logger.warning("math_claim_verifier | Local LLM failed: %s", str(e)[:100])
 
-    # ── Fallback: Gemini ─────────────────────────────────────────────────
-    if not raw:
-        try:
-            from nodes.claim_verifier import _gemini_generate  # type: ignore[import-not-found]
-            raw = _gemini_generate(prompt)
-        except Exception as e:
-            logger.warning("math_claim_verifier | Gemini fallback failed: %s", str(e)[:100])
+    # (No Gemini fallback — API reserved for refiner only)
 
     if not raw:
         logger.warning("math_claim_verifier | All LLMs returned empty response.")
@@ -130,7 +99,6 @@ def _extract_math_from_claim(claim: str) -> Optional[Dict[str, str]]:
 
 
 def _extract_json_block(text: str) -> str:
-    """Extract JSON from a markdown fence or find a bare JSON object."""
     match = re.search(r"```(?:json)?\s*\n([\s\S]*?)```", text)
     if match:
         return match.group(1).strip()
@@ -224,11 +192,6 @@ def _run_sympy_verification(
     claimed_value: str,
     verification_type: str,
 ) -> Dict[str, Any]:
-    """
-    Run SymPy verification in an isolated subprocess.
-
-    Returns a dict with keys: ok, computed (str), matches (bool), error (str).
-    """
     script = _SYMPY_VERIFY_TEMPLATE.format(
         expression=expression,
         claimed_value=claimed_value,
@@ -272,23 +235,6 @@ def _run_sympy_verification(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def verify_math_claim(claim: str) -> Dict[str, Any]:
-    """
-    Verify a math-related claim using LLM extraction + SymPy evaluation.
-
-    Pipeline:
-      1. Local LLM (Ollama) extracts the equation / assertion as SymPy strings.
-      2. SymPy evaluates and simplifies in an isolated subprocess.
-      3. The computed result is compared against the claimed value.
-
-    Args:
-        claim: A single atomic math claim (e.g., "2^10 = 1024",
-               "the derivative of x² is 2x", "5! = 120").
-
-    Returns:
-        Dict with:
-          - ``"verdict"``: ``"SUPPORTED"``, ``"CONTRADICTED"``, or ``"UNKNOWN"``
-          - ``"computed"``: The SymPy-computed result (str), or ``None``
-    """
     if not claim or not claim.strip():
         return {"verdict": "UNKNOWN", "computed": None}
 

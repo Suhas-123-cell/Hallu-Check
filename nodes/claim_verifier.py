@@ -1,21 +1,3 @@
-"""
-hallu-check | nodes/claim_verifier.py
-Node 5 — Claim-Level Hallucination Detection (v4: NLI-Based)
-
-Architecture (v4):
-  1. Gemini extracts atomic claims from LLM output (LLMs are good at decomposition)
-  2. DeBERTa NLI model verifies each claim against RAG context (trained classifier)
-  3. Composite hallucination score = NLI-weighted claim scores + NLI alignment
-
-This replaces the v3 approach where Gemini did BOTH extraction AND verification.
-The NLI model gives:
-  - Deterministic, calibrated probability scores
-  - ~50ms per claim (vs seconds-long Gemini calls)
-  - No sycophancy or positional bias
-  - Real softmax probabilities, not fabricated "confidence"
-
-Falls back to Gemini-based verification if the NLI model is not available.
-"""
 from __future__ import annotations
 
 import json
@@ -25,12 +7,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
-import google.genai as genai  # type: ignore[import-not-found, import-untyped]
-from google.genai import types as genai_types  # type: ignore[import-not-found, import-untyped]
-
 from config import (  # type: ignore[import-not-found]
-    GEMINI_API_KEY,
-    GEMINI_MODEL,
     HALLUCINATION_THRESHOLD,
     USE_NLI_MODEL,
     NLI_BATCH_SIZE,
@@ -40,17 +17,6 @@ from config import (  # type: ignore[import-not-found]
 
 logger = logging.getLogger("hallu-check.claim_verifier")
 
-# Maximum retries for rate-limited Gemini calls
-_MAX_RETRIES = 3
-_DEFAULT_RETRY_DELAY = 15  # seconds
-
-# ── Gemini generation config (scaled for large inputs/outputs) ───────────────
-_GEMINI_HTTP_OPTIONS = genai_types.HttpOptions(timeout=120_000)  # 120s (in ms) for massive prompts
-_GEMINI_GENERATE_CONFIG = genai_types.GenerateContentConfig(
-    max_output_tokens=8192,
-    http_options=_GEMINI_HTTP_OPTIONS,
-)
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # NLI Model (lazy-loaded singleton)
@@ -59,7 +25,6 @@ _nli_loaded = False
 
 
 def _ensure_nli_model() -> bool:
-    """Lazy-load the NLI model on first use."""
     global _nli_loaded
     if _nli_loaded:
         return True
@@ -90,7 +55,6 @@ def _ensure_nli_model() -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 @dataclass
 class ClaimVerdict:
-    """Verdict for a single atomic claim."""
     claim: str
     verdict: str        # SUPPORTED, CONTRADICTED, UNVERIFIABLE, NO_CLAIM, HONEST_UNCERTAINTY
     evidence: str       # RAG snippet backing the verdict (empty if none)
@@ -107,7 +71,6 @@ class ClaimVerdict:
 
 @dataclass
 class HallucinationReport:
-    """Full hallucination analysis report."""
     claim_verdicts: List[ClaimVerdict] = field(default_factory=list)
     hallucination_score: float = 0.0       # 0.0 (clean) → 1.0 (fully hallucinated)
     hallucination_detected: bool = False
@@ -128,18 +91,13 @@ class HallucinationReport:
 # 1. Honest Uncertainty Detection (LOCAL — no LLM needed)
 # ─────────────────────────────────────────────────────────────────────────────
 _UNCERTAINTY_PATTERNS = [
-    r"i (?:don['\u2019]?t|do not) (?:have|know)",
-    r"i couldn['\u2019]?t find",
-    r"i (?:am |['\u2019]m )not (?:sure|certain|aware)",
-    r"(?:no|not enough) (?:specific |reliable )?information",
-    r"(?:cannot|can['\u2019]?t) (?:find|provide|confirm|verify)",
-    r"there (?:is|are) no (?:specific |reliable )?(?:information|data|records?)",
-    r"i (?:am |['\u2019]m )unable to (?:find|provide|verify)",
-    r"as of my (?:last |knowledge )?(?:update|cut.?off)",
-    r"my (?:training )?(?:data|knowledge) (?:does not|doesn['\u2019]?t)",
+    r"i (?:don['\u2019]?t|do not) know\b",
+    r"i couldn['\u2019]?t find (?:any )?(?:information|data)",
+    r"i (?:am |['\u2019]m )not sure\b",
+    r"(?:cannot|can['\u2019]?t) (?:find|provide|confirm|verify) (?:any )?(?:information|data)",
+    r"there (?:is|are) no (?:specific |reliable )?(?:information|data|records?) available",
+    r"i (?:am |['\u2019]m )unable to (?:find|provide|verify) (?:the )?(?:answer|information)",
     r"beyond my (?:current )?knowledge",
-    r"not (?:a )?(?:widely |publicly )?(?:known|recognized|notable)",
-    r"i['\u2019]m not sure",
 ]
 _UNCERTAINTY_RE = re.compile(
     "|".join(_UNCERTAINTY_PATTERNS), re.IGNORECASE
@@ -147,12 +105,6 @@ _UNCERTAINTY_RE = re.compile(
 
 
 def is_honest_uncertainty(text: str) -> bool:
-    """
-    Detect if the LLM output is an honest admission of not knowing.
-    This is NOT a hallucination — it's the model being truthful.
-
-    Uses regex patterns only (zero API calls).
-    """
     return bool(_UNCERTAINTY_RE.search(text))
 
 
@@ -179,17 +131,6 @@ _RAG_EMPTY_MARKERS = [
 
 
 def _rag_has_substantive_content(rag_output: str, query: str) -> bool:
-    """
-    Determine if the RAG output contains real, substantive content about
-    the query subject — not just empty/fallback messages.
-
-    Checks:
-      1. RAG output is not a known fallback/empty message
-      2. RAG output has meaningful length (>150 chars after stripping boilerplate)
-      3. At least one word from the query appears in the RAG output
-
-    Returns True if the RAG output has real content worth using for refinement.
-    """
     if not rag_output or len(rag_output.strip()) < 50:
         return False
 
@@ -245,152 +186,7 @@ def _rag_has_substantive_content(rag_output: str, query: str) -> bool:
     return True
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2. Gemini API Helper (with rate-limit retry)
-# ─────────────────────────────────────────────────────────────────────────────
-def _parse_retry_delay(error_msg: str) -> float:
-    """Extract retryDelay seconds from a Gemini 429 error message."""
-    match = re.search(r"retryDelay['\"]:\s*['\"](\d+(?:\.\d+)?)(s|ms)", str(error_msg))
-    if match:
-        value = float(match.group(1))
-        unit = match.group(2)
-        return value / 1000 if unit == "ms" else value
-    return _DEFAULT_RETRY_DELAY
 
-
-def _gemini_generate(prompt: str) -> str:
-    """Call Gemini with rate-limit-aware retries. Returns raw text.
-
-    If ``_gemini_cache`` is not None (activated by ``enable_gemini_cache()``),
-    results are deduped via MD5 hash and persisted to a JSON file on disk.
-    """
-    # ── Cache lookup ──────────────────────────────────────────────────
-    if _gemini_cache is not None:
-        import hashlib
-        cache_key = hashlib.md5(prompt.encode()).hexdigest()
-        if cache_key in _gemini_cache:
-            logger.debug("Node 5 | Gemini cache HIT (key=%s…)", cache_key[:8])
-            return _gemini_cache[cache_key]
-
-    if not GEMINI_API_KEY:
-        raise EnvironmentError(
-            "GEMINI_API_KEY is not set. Add it to your .env file.\n"
-            "Get one free at https://aistudio.google.com/app/apikey"
-        )
-
-    # SSL workaround for macOS
-    import ssl
-    import os
-    os.environ["GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"] = ""
-    try:
-        ssl._create_default_https_context = ssl._create_unverified_context
-    except AttributeError:
-        pass
-
-    client = genai.Client(api_key=GEMINI_API_KEY)
-
-    for attempt in range(1, _MAX_RETRIES + 1):
-        try:
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt,
-                config=_GEMINI_GENERATE_CONFIG,
-            )
-            content = getattr(response, "text", None)
-            if not content and hasattr(response, "candidates"):
-                candidates = getattr(response, "candidates", [])
-                if candidates and hasattr(candidates[0], "text"):
-                    content = candidates[0].text
-            result = content.strip() if content else ""
-
-            # ── Cache store ───────────────────────────────────────────
-            if _gemini_cache is not None and result:
-                _gemini_cache[cache_key] = result
-                _save_gemini_cache()
-
-            return result
-        except Exception as e:
-            error_str = str(e)
-            is_rate_limit = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
-            is_timeout = "timed out" in error_str or "ReadTimeout" in error_str or "TimeoutError" in error_str
-            is_retryable = is_rate_limit or is_timeout
-
-            if is_retryable and attempt < _MAX_RETRIES:
-                if is_rate_limit:
-                    delay = min(_parse_retry_delay(error_str) + 1, 60)
-                else:
-                    delay = 5  # short delay before timeout retry
-                logger.warning(
-                    "Node 5 | Gemini %s (attempt %d/%d), waiting %.1fs…",
-                    "rate-limited" if is_rate_limit else "timed out",
-                    attempt, _MAX_RETRIES, delay,
-                )
-                time.sleep(delay)
-                continue
-
-            logger.warning(
-                "Node 5 | Gemini call failed (attempt %d/%d): %s",
-                attempt, _MAX_RETRIES, e,
-            )
-            return ""
-
-    return ""
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Gemini Response Cache (opt-in, disk-backed)
-# ─────────────────────────────────────────────────────────────────────────────
-_gemini_cache: Optional[Dict[str, str]] = None
-_gemini_cache_path: Optional[str] = None
-
-
-def enable_gemini_cache(cache_file: str = "gemini_cache.json") -> int:
-    """
-    Activate disk-backed Gemini response caching.
-
-    All subsequent ``_gemini_generate()`` calls will be deduped via MD5
-    hash. Existing cache entries are loaded from ``cache_file``.
-
-    Args:
-        cache_file: Path to the JSON cache file (created if missing).
-
-    Returns:
-        Number of entries loaded from the existing cache.
-    """
-    global _gemini_cache, _gemini_cache_path
-    import os
-
-    _gemini_cache_path = cache_file
-    if os.path.exists(cache_file):
-        try:
-            with open(cache_file) as f:
-                _gemini_cache = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            _gemini_cache = {}
-    else:
-        _gemini_cache = {}
-
-    n = len(_gemini_cache)
-    logger.info("Gemini cache enabled: %d entries loaded from %s", n, cache_file)
-    return n
-
-
-def disable_gemini_cache() -> None:
-    """Deactivate Gemini response caching."""
-    global _gemini_cache, _gemini_cache_path
-    _gemini_cache = None
-    _gemini_cache_path = None
-    logger.info("Gemini cache disabled.")
-
-
-def _save_gemini_cache() -> None:
-    """Persist the cache to disk (called after each new entry)."""
-    if _gemini_cache is not None and _gemini_cache_path:
-        try:
-            with open(_gemini_cache_path, "w") as f:
-                json.dump(_gemini_cache, f, indent=0)
-        except OSError as e:
-            logger.warning("Gemini cache save failed: %s", e)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -427,27 +223,6 @@ Respond ONLY with this JSON (no markdown fences, no extra text):
 
 
 def _extract_claims(llm_output: str, query: str = "") -> List[str]:
-    """
-    Extract atomic claims from LLM output using NLTK sentence tokenization.
-
-    Uses proper sentence-boundary detection to extract factual statements
-    directly from the LLM output — no LLM API call, zero hallucination risk.
-
-    Previously used regex splitting on [.!?] which broke on abbreviations
-    ("U.S.", "Dr.", "e.g.") and created phantom sentence fragments that
-    weren't in the original text. NLTK sent_tokenize handles these correctly.
-
-    For code-heavy outputs, fenced code blocks are stripped before tokenization
-    so only the prose explanations are extracted as verifiable claims.
-
-    After extraction, _validate_claims() checks that every extracted claim
-    is actually grounded in the original LLM output (word overlap ≥ 60%).
-    This catches any fragments that get corrupted during splitting.
-
-    Args:
-        llm_output: The LLM's answer text.
-        query: The user's original query (unused, kept for interface compat).
-    """
     if not llm_output or len(llm_output.strip()) < 10:
         return []
 
@@ -480,18 +255,34 @@ def _extract_claims(llm_output: str, query: str = "") -> List[str]:
     ]
 
     # Filter out meta-statements (not factual claims).
-    # Only match at sentence START to avoid false positives like
-    # "Here's an explanation" being caught by "here's".
+    # Match at sentence START — but first strip leading transition words
+    # so "However, please note…" / "But I recommend…" are caught too.
     meta_starts = [
         "sure,", "here is ", "here's ", "i can help", "let me ",
         "in summary", "i hope ", "feel free", "let me know",
         "you can test", "you can use", "you can run",
         "this code ", "this solution ", "this should ",
+        "i don't have", "i do not have", "please note", "note that",
+        "as an ai", "i am an ai", "i cannot", "i can't",
+        "it's important to note", "keep in mind", "i am a large",
+        "i recommend", "i would recommend", "i suggest",
+        "for the most ", "for more ", "for up-to-date ",
+        "please check", "please verify", "please consult",
+        "this information may", "this may have changed",
+        "the information provided",
     ]
-    claims = [
-        s for s in sentences
-        if not any(s.lower().strip().startswith(meta) for meta in meta_starts)
-    ]
+    _LEADING_CONNECTIVES = re.compile(
+        r"^(?:however|but|also|additionally|furthermore|moreover|"
+        r"nonetheless|nevertheless|though|although|still|yet|so|"
+        r"therefore|thus|hence)[,:]?\s+",
+        re.IGNORECASE,
+    )
+
+    def _is_meta(sentence: str) -> bool:
+        stripped = _LEADING_CONNECTIVES.sub("", sentence.lower().strip())
+        return any(stripped.startswith(meta) for meta in meta_starts)
+
+    claims = [s for s in sentences if not _is_meta(s)]
 
     # Cap at 10 claims
     claims = claims[:10]
@@ -504,10 +295,6 @@ def _extract_claims(llm_output: str, query: str = "") -> List[str]:
 
 
 def _fallback_extract_claims(llm_output: str) -> List[str]:
-    """
-    Fallback claim extraction when Gemini is unavailable.
-    Splits on sentence boundaries and filters short fragments.
-    """
     sentences = [
         s.strip()
         for s in re.split(r"[.!?]+", llm_output)
@@ -526,20 +313,6 @@ def _fallback_extract_claims(llm_output: str) -> List[str]:
 
 
 def _validate_claims(claims: List[str], llm_output: str) -> List[str]:
-    """
-    Discard claims that Gemini fabricated during extraction.
-
-    Checks word overlap between each extracted claim and the original LLM
-    output. If a claim's content words don't appear in the LLM output,
-    it was hallucinated by the extraction model — discard it.
-
-    Args:
-        claims: List of claims extracted by Gemini.
-        llm_output: The original LLM answer text.
-
-    Returns:
-        Filtered list of claims that are actually grounded in the LLM output.
-    """
     if not claims:
         return []
 
@@ -585,19 +358,6 @@ def _verify_claims_nli(
     rag_output: str,
     query: str,
 ) -> List[ClaimVerdict]:
-    """
-    Verify each claim against RAG context using the trained NLI model.
-
-    For each claim:
-      1. premise = RAG context (evidence)
-      2. hypothesis = the claim
-      3. NLI model returns: entailment/neutral/contradiction with probabilities
-
-    Maps NLI labels to hallucination verdicts:
-      entailment    → SUPPORTED
-      neutral       → UNVERIFIABLE
-      contradiction → CONTRADICTED
-    """
     from nodes.nli_model import classify_nli_batch  # type: ignore[import-not-found]
 
     if not claims:
@@ -667,154 +427,13 @@ def _verify_claims_nli(
     return verdicts
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 5. Gemini-Based Verification (FALLBACK when NLI model unavailable)
-# ─────────────────────────────────────────────────────────────────────────────
-_VERIFY_PROMPT_GEMINI = """\
-You are a hallucination detection system. You will be given a user's question, an LLM's answer, and retrieved factual context.
 
-Your task:
-1. Extract every atomic factual claim from the LLM answer.
-   - An "atomic claim" is the smallest standalone factual statement.
-   - Skip filler phrases, greetings, and meta-statements like "Sure, here's the answer".
-   - If the answer contains NO factual claims (e.g., "I don't know"), return an empty claims list.
-
-2. For each claim, verify it against the provided context and assign a verdict.
-   IMPORTANT — follow these reasoning rules carefully:
-
-   a) USE LOGICAL/TRANSITIVE INFERENCE:
-      Do NOT evaluate claims in isolation. Use logical reasoning to connect facts.
-      Example: If the context says "X is the current President" and the LLM claims
-      "Y was the previous President", these are CONSISTENT — do NOT mark Y's claim
-      as CONTRADICTED just because the context names X. Only mark CONTRADICTED if
-      the context explicitly names a DIFFERENT person as the previous President.
-
-   b) CONSIDER THE QUESTION'S INTENT:
-      If the user asks about the "previous" holder of a role, and the LLM correctly
-      names someone who held the role before the current holder mentioned in the
-      context, that is logically SUPPORTED, not contradicted.
-
-   c) DISTINGUISH "OUTDATED" FROM "WRONG":
-      If a claim was historically true but is no longer current (e.g., "X has been
-      serving as PM since 2020" but the context shows X was replaced in 2025), the
-      IDENTITY part (X was PM) may still be correct even if the TENURE part (still
-      serving) is outdated. Evaluate each atomic fact separately.
-
-   d) STRICT CONTRADICTED THRESHOLD:
-      Only use CONTRADICTED when the context DIRECTLY and EXPLICITLY conflicts with
-      the claim — not when the context merely provides different (but compatible)
-      information. When in doubt between CONTRADICTED and UNVERIFIABLE, prefer
-      UNVERIFIABLE.
-
-   Verdict options:
-   - SUPPORTED: The context confirms this claim (directly or through logical inference).
-   - CONTRADICTED: The context DIRECTLY and EXPLICITLY conflicts with this specific claim.
-   - UNVERIFIABLE: The context has no relevant information about this claim, or the
-     evidence is ambiguous.
-   - NO_CLAIM: This is not a factual claim (opinion, hedge, question, etc.)
-
-3. For each verdict, provide:
-   - The exact evidence quote from the context (or "No relevant evidence found" if UNVERIFIABLE).
-   - A brief reasoning chain showing how you arrived at the verdict.
-   - A confidence score (0.0 to 1.0) for your verdict.
-
-Question: {query}
-
-LLM Answer:
-{llm_output}
-
-Retrieved Context:
-{rag_context}
-
-Respond ONLY with this JSON (no markdown fences, no extra text):
-{{
-  "claims": [
-    {{
-      "claim": "<atomic claim text>",
-      "verdict": "<SUPPORTED|CONTRADICTED|UNVERIFIABLE|NO_CLAIM>",
-      "evidence": "<exact quote from context or 'No relevant evidence found'>",
-      "reasoning": "<brief reasoning chain explaining how you reached this verdict>",
-      "confidence": <0.0-1.0>
-    }}
-  ]
-}}
-"""
-
-
-def _verify_claims_gemini(
-    llm_output: str,
-    rag_output: str,
-    query: str,
-) -> List[ClaimVerdict]:
-    """
-    Fallback: Extract and verify claims using Gemini (v3 approach).
-    Used when the NLI model is not available.
-    """
-    rag_truncated = rag_output[:12000] if len(rag_output) > 12000 else rag_output
-
-    prompt = _VERIFY_PROMPT_GEMINI.format(
-        query=query,
-        llm_output=llm_output,
-        rag_context=rag_truncated,
-    )
-
-    raw = _gemini_generate(prompt)
-    if not raw:
-        logger.warning("Node 5 | Gemini unavailable, using fallback heuristic.")
-        return _fallback_verify(llm_output, rag_output)
-
-    # Parse JSON response
-    try:
-        json_match = re.search(r"```(?:json)?\s*(.*?)```", raw, re.DOTALL)
-        if json_match:
-            parsed = json.loads(json_match.group(1).strip())
-        else:
-            parsed = json.loads(raw.strip())
-    except json.JSONDecodeError:
-        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if json_match:
-            try:
-                parsed = json.loads(json_match.group(0))
-            except json.JSONDecodeError:
-                logger.warning("Node 5 | Failed to parse Gemini response, using fallback.")
-                return _fallback_verify(llm_output, rag_output)
-        else:
-            logger.warning("Node 5 | No JSON in Gemini response, using fallback.")
-            return _fallback_verify(llm_output, rag_output)
-
-    verdicts: List[ClaimVerdict] = []
-    claims = parsed.get("claims", [])
-    if not isinstance(claims, list):
-        return _fallback_verify(llm_output, rag_output)
-
-    for item in claims:
-        if not isinstance(item, dict):
-            continue
-        verdict_str = item.get("verdict", "UNVERIFIABLE").upper()
-        valid_verdicts = {"SUPPORTED", "CONTRADICTED", "UNVERIFIABLE", "NO_CLAIM"}
-        if verdict_str not in valid_verdicts:
-            verdict_str = "UNVERIFIABLE"
-
-        verdicts.append(ClaimVerdict(
-            claim=item.get("claim", ""),
-            verdict=verdict_str,
-            evidence=item.get("evidence", ""),
-            confidence=float(item.get("confidence", 0.5)),
-            reasoning=item.get("reasoning", ""),
-        ))
-
-    logger.info("Node 5 | Extracted %d claims via Gemini (fallback).", len(verdicts))
-    return verdicts
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 6. Keyword-Based Fallback (last resort)
 # ─────────────────────────────────────────────────────────────────────────────
 def _fallback_verify(llm_output: str, rag_output: str) -> List[ClaimVerdict]:
-    """
-    Simple keyword-overlap heuristic for claim verification when both
-    NLI model and Gemini are unavailable.
-    """
     llm_words = set(llm_output.lower().split())
     rag_words = set(rag_output.lower().split())
 
@@ -857,21 +476,6 @@ def _compute_hallucination_score(
     verdicts: List[ClaimVerdict],
     nli_alignment_score: float,
 ) -> float:
-    """
-    Compute a composite hallucination score (0.0 = clean, 1.0 = fully hallucinated).
-
-    v4 Formula (NLI-based):
-      For each claim, use the NLI contradiction probability as the signal:
-        claim_risk = P(contradiction) + 0.3 × P(neutral)
-
-      claim_score = Σ(claim_risk) / total_claims
-      hallucination_score = 0.7 × claim_score + 0.3 × (1 - nli_alignment_score)
-
-    This is semantically correct:
-      - P(contradiction) directly measures factual conflict
-      - P(neutral) partially penalises unverifiable claims
-      - NLI alignment score replaces BERTScore with entailment-based similarity
-    """
     if not verdicts:
         return max(0.0, min(1.0, 1.0 - nli_alignment_score))
 
@@ -902,7 +506,6 @@ def _compute_hallucination_score(
 
 
 def _generate_summary(verdicts: List[ClaimVerdict], score: float, method: str) -> str:
-    """Generate a human-readable hallucination summary."""
     counts: Dict[str, int] = {}
     for v in verdicts:
         counts[v.verdict] = counts.get(v.verdict, 0) + 1
@@ -957,26 +560,6 @@ def verify_claims(
     bertscore_f1: float = 0.0,
     nli_alignment_score: float | None = None,
 ) -> HallucinationReport:
-    """
-    Node 5 — Full claim-level hallucination detection (v4: NLI-based).
-
-    Architecture:
-      1. Check for honest uncertainty (local, no API call)
-      2. Extract atomic claims via Gemini (LLMs excel at decomposition)
-      3. Verify each claim via DeBERTa NLI model (falls back to Gemini if unavailable)
-      4. Compute hallucination score using NLI probabilities + alignment
-      5. Return structured report
-
-    Args:
-        llm_output: The LLM's preliminary answer (Node 1).
-        rag_output: RAG-retrieved context (Node 4).
-        query:      The user's original query.
-        bertscore_f1: (DEPRECATED) BERTScore F1 from Node 4. Ignored if NLI alignment is available.
-        nli_alignment_score: NLI-based alignment score (0.0–1.0). If None, uses bertscore_f1 as fallback.
-
-    Returns:
-        HallucinationReport with per-claim verdicts and overall score.
-    """
     logger.info("Node 5 | Starting claim-level verification…")
 
     # Use NLI alignment if available, otherwise fall back to BERTScore
@@ -1033,7 +616,7 @@ def verify_claims(
 
     # ── Step 2: Determine verification method ────────────────────────
     use_nli = _ensure_nli_model()
-    method = "nli" if use_nli else "gemini"
+    method = "nli" if use_nli else "keyword"
 
     if use_nli:
         # ── NLI PATH: Extract claims → Classify → Route ─────────────
@@ -1064,9 +647,9 @@ def verify_claims(
             method = methods_used.pop()
         # else: stays as "nli"
     else:
-        # ── GEMINI FALLBACK: Extract + Verify in one call ────────────
-        logger.info("Node 5 | Using Gemini fallback for verification.")
-        verdicts = _verify_claims_gemini(llm_output, rag_output, query)
+        # ── KEYWORD FALLBACK: No NLI model and no Gemini API ─────────
+        logger.info("Node 5 | NLI model unavailable — using keyword-overlap fallback.")
+        verdicts = _fallback_verify(llm_output, rag_output)
 
     if not verdicts:
         logger.info("Node 5 | No claims extracted from LLM output.")
@@ -1078,11 +661,10 @@ def verify_claims(
             verification_method=method,
         )
 
-    # ── Step 3: Surgical correction for CONTRADICTED claims ──────────
-    if ENABLE_SURGICAL_CORRECTION:
-        verdicts, llm_output = _apply_surgical_corrections(
-            verdicts, llm_output, rag_output,
-        )
+    # ── Step 3: Surgical correction (DISABLED — handled by ICR loop) ──
+    # The ICR loop in iterative_refiner.py handles correction with
+    # route-awareness: Gemini for FACTUAL, surgical for REASONING.
+    # Running it here with the local LLM corrupts factual answers.
 
     # ── Step 4: Compute hallucination score ──────────────────────────
     score = _compute_hallucination_score(verdicts, alignment_score)
@@ -1124,26 +706,6 @@ def _classify_and_verify_claims(
     rag_output: str,
     query: str,
 ) -> List[ClaimVerdict]:
-    """
-    Classify each extracted claim and route to the correct verifier.
-
-    Flow per claim:
-      factual → NLI (batched for efficiency)
-      code    → verify_code_claim (EGV)
-      math    → verify_math_claim (EGV)
-
-    Factual claims are batched together into a single _verify_claims_nli()
-    call to preserve the DeBERTa batch-inference performance.
-
-    Args:
-        claims:     List of extracted atomic claim strings.
-        llm_output: The full LLM answer (needed for code snippet extraction).
-        rag_output: RAG-retrieved context.
-        query:      The user's original query.
-
-    Returns:
-        List of ClaimVerdict objects, each tagged with verification_method.
-    """
     from nodes.claim_classifier import classify_claim  # type: ignore[import-not-found]
 
     # ── Classify all claims ───────────────────────────────────────────
@@ -1246,10 +808,6 @@ def _verify_single_code_claim(
     rag_output: str,
     verify_fn: Any,
 ) -> ClaimVerdict:
-    """
-    Verify a single code claim via verify_code_claim and convert
-    the result dict into a ClaimVerdict.
-    """
     import re as _re
     import textwrap as _tw
 
@@ -1322,10 +880,6 @@ def _verify_single_math_claim(
     claim: str,
     verify_fn: Any,
 ) -> ClaimVerdict:
-    """
-    Verify a single math claim via verify_math_claim and convert
-    the result dict into a ClaimVerdict.
-    """
     try:
         result = verify_fn(claim)
     except Exception as e:
@@ -1368,21 +922,6 @@ def _apply_surgical_corrections(
     llm_output: str,
     rag_output: str,
 ) -> tuple:
-    """
-    Post-process verdicts: surgically correct each CONTRADICTED claim.
-
-    Uses surgical_correct_single to replace only the wrong claim in the
-    full answer, preserving everything else.
-
-    Args:
-        verdicts:   List of ClaimVerdict objects.
-        llm_output: The original LLM answer text.
-        rag_output: RAG-retrieved evidence context.
-
-    Returns:
-        Tuple of (verdicts, corrected_output). Verdicts are unchanged;
-        corrected_output has CONTRADICTED claims replaced.
-    """
     contradicted = [v for v in verdicts if v.verdict == "CONTRADICTED"]
     if not contradicted:
         return verdicts, llm_output

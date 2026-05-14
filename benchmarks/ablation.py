@@ -1,23 +1,3 @@
-"""
-hallu-check | benchmarks/ablation.py
-Automated Ablation Study Runner
-
-Runs the pipeline with each component toggled on/off to measure
-individual contribution. This is essential for the paper — reviewers
-need to see which components actually help.
-
-Ablation configs:
-  - Full pipeline (all contributions enabled)
-  - − ICR (one-shot refinement only)
-  - − EGV (NLI for code/math)
-  - − Surgical (one-shot edit instead of per-claim)
-  - − Self-Consistency
-  - − RLM
-  - Raw Llama (no pipeline at all)
-
-Usage:
-    python -m benchmarks.ablation --dataset truthfulqa --samples 50
-"""
 from __future__ import annotations
 
 import argparse
@@ -114,13 +94,11 @@ ABLATION_CONFIGS = [
 
 
 def _set_env(env_dict: Dict[str, str]):
-    """Set environment variables for an ablation config."""
     for key, value in env_dict.items():
         os.environ[key] = value
 
 
 def _reload_config():
-    """Reload config module to pick up new env vars."""
     import importlib
     import config  # type: ignore
     importlib.reload(config)
@@ -130,16 +108,6 @@ def run_ablation(
     dataset: str = "truthfulqa",
     max_samples: int = 50,
 ) -> List[Dict]:
-    """
-    Run all ablation configs against a benchmark dataset.
-
-    Args:
-        dataset: "truthfulqa" or "halueval"
-        max_samples: Number of samples per config
-
-    Returns:
-        List of result dicts, one per ablation config.
-    """
     results: List[Dict] = []
 
     for config_idx, ablation in enumerate(ABLATION_CONFIGS):
@@ -193,7 +161,6 @@ def run_ablation(
 
 
 def _format_table(results: List[Dict], dataset: str):
-    """Format results as a readable table."""
     print("\n" + "=" * 90)
     print(f"  ABLATION STUDY RESULTS — {dataset.upper()}")
     print("=" * 90)

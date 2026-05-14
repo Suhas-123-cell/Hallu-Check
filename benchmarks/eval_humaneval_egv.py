@@ -1,25 +1,3 @@
-"""
-hallu-check | benchmarks/eval_humaneval_egv.py
-EGV Pipeline Ablation Benchmark on HumanEval (164 problems)
-
-Compares the FULL pipeline (EGV + NLI + surgical correction) against the
-NLI-ONLY baseline on code-generation tasks from OpenAI's HumanEval dataset.
-
-For each of the 164 HumanEval problems:
-  1. Llama 3.2-1B generates an answer
-  2. Run the FULL pipeline (claim classification → EGV for code/math, NLI for factual)
-  3. Run the BASELINE (NLI-only, no claim classification, no EGV)
-  4. Measure per-problem:
-     • catch_rate: Did the pipeline detect a real bug?  (TP / (TP + FN))
-     • false_positive_rate: Did it flag correct code?   (FP / (FP + TN))
-     • correction_induced_hallucination_rate: Did surgical correction
-       introduce NEW bugs? (re-run EGV on the corrected output)
-
-Outputs a pandas DataFrame and saves to CSV.
-
-Usage:
-    python -m benchmarks.eval_humaneval_egv [--samples 164]
-"""
 from __future__ import annotations
 
 import argparse
@@ -62,7 +40,6 @@ logger = logging.getLogger("benchmark.humaneval_egv")
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _extract_function(llm_output: str, entry_point: str) -> str:
-    """Extract a Python function from LLM output."""
     # Fenced code blocks
     code_match = re.search(r"```(?:python|py)?\s*\n([\s\S]*?)```", llm_output)
     if code_match:
@@ -80,11 +57,6 @@ def _extract_function(llm_output: str, entry_point: str) -> str:
 
 
 def _run_tests(prompt: str, code: str, test: str, entry_point: str) -> bool:
-    """
-    Run HumanEval test suite against generated code.
-    Returns True if all tests pass, False otherwise.
-    Uses subprocess.run() — never eval/exec.
-    """
     full_script = f"{prompt}\n{code}\n\n{test}\n\ncheck({entry_point})\n"
 
     try:
@@ -110,7 +82,6 @@ _llama_cache_path: Optional[str] = None
 
 
 def enable_llama_cache(cache_file: str = "llama_cache.json") -> int:
-    """Activate disk-backed Llama output caching."""
     global _llama_cache, _llama_cache_path
     _llama_cache_path = cache_file
     if os.path.exists(cache_file):
@@ -134,7 +105,6 @@ def _save_llama_cache() -> None:
 
 
 def cached_generate(query: str, generate_fn) -> str:
-    """Generate LLM output with optional disk cache."""
     import hashlib
     if _llama_cache is not None:
         key = hashlib.md5(query.encode()).hexdigest()
@@ -152,12 +122,6 @@ def cached_generate(query: str, generate_fn) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _set_pipeline_flags(enable_egv: bool, enable_correction: bool) -> None:
-    """
-    Toggle ENABLE_EGV and ENABLE_SURGICAL_CORRECTION at runtime.
-
-    Must patch BOTH the config module AND the claim_verifier module,
-    because ``from config import X`` captures by value at import time.
-    """
     import config as _cfg  # type: ignore
     import nodes.claim_verifier as _cv  # type: ignore
 
@@ -178,10 +142,6 @@ def _run_full_pipeline(
     query: str,
     rag_output: str = "",
 ) -> Dict[str, Any]:
-    """
-    Run the FULL pipeline: claim extraction → classify → EGV/NLI.
-    Surgical correction is controlled by _BENCH_ENABLE_CORRECTION env var.
-    """
     from nodes.claim_verifier import verify_claims  # type: ignore
 
     enable_correction = (
@@ -230,11 +190,6 @@ def _run_nli_baseline(
     query: str,
     rag_output: str = "",
 ) -> Dict[str, Any]:
-    """
-    Run NLI-ONLY baseline: claim extraction → NLI for ALL claims (no EGV, no classification).
-
-    Returns same schema as _run_full_pipeline.
-    """
     from nodes.claim_verifier import verify_claims  # type: ignore
 
     _set_pipeline_flags(enable_egv=False, enable_correction=False)
@@ -283,18 +238,6 @@ def _check_correction_hallucination(
     test: str,
     entry_point: str,
 ) -> bool:
-    """
-    Check if surgical correction introduced NEW hallucinations (bugs).
-
-    Logic:
-      - Extract code from the corrected output
-      - Run HumanEval tests against it
-      - If original passed but corrected FAILS → correction introduced a bug
-      - If original failed and corrected also fails → no new hallucination
-        (it was already wrong)
-
-    Returns True if the correction INTRODUCED a new bug (broke something that was working).
-    """
     original_code = _extract_function(original_output, entry_point)
     corrected_code = _extract_function(corrected_output, entry_point)
 
@@ -318,33 +261,12 @@ def evaluate_humaneval_egv(
     enable_cache: bool = True,
     enable_correction: bool = False,
 ) -> pd.DataFrame:
-    """
-    Run the full EGV ablation benchmark on HumanEval.
-
-    For each of 164 problems:
-      1. Generate answer with Llama 3.2
-      2. Run full pipeline (EGV + NLI)
-      3. Run baseline (NLI-only)
-      4. Measure catch_rate, false_positive_rate, correction_induced_hallucination_rate
-
-    Args:
-        max_samples:       Number of problems to evaluate (max 164).
-        enable_cache:      If True, cache Gemini responses to disk (saves ~30-40% tokens).
-        enable_correction: If True, run surgical correction (expensive, off by default).
-
-    Returns a pandas DataFrame with per-problem results.
-    """
     from datasets import load_dataset  # type: ignore
     from nodes.generator import generate_llm_output  # type: ignore
 
-    # ── Optimization 1: Enable Gemini response cache ──────────────────
+    # ── Optimization 1: Enable Llama response cache ────────────────────
     if enable_cache:
-        from nodes.claim_verifier import enable_gemini_cache  # type: ignore
         cache_dir = Path(__file__).resolve().parent
-
-        gemini_cache_path = str(cache_dir / "gemini_cache.json")
-        n_gemini = enable_gemini_cache(gemini_cache_path)
-        print(f"Gemini cache: {n_gemini} entries loaded from {gemini_cache_path}")
 
         llama_cache_path = str(cache_dir / "llama_cache.json")
         n_llama = enable_llama_cache(llama_cache_path)
@@ -478,18 +400,6 @@ def evaluate_humaneval_egv(
 
 
 def compute_metrics(df: pd.DataFrame) -> Dict[str, Any]:
-    """
-    Compute aggregate metrics from the per-problem DataFrame.
-
-    Definitions:
-      - TP (True Positive):  Code has real bug AND pipeline detected it
-      - FP (False Positive): Code is correct AND pipeline flagged it
-      - FN (False Negative): Code has real bug AND pipeline missed it
-      - TN (True Negative):  Code is correct AND pipeline did NOT flag it
-
-    ground_truth: raw_code_passes (True = code is correct, False = code has bugs)
-    pipeline_flag: full_detected (True = pipeline flagged hallucination)
-    """
     valid = df[df["generation_ok"]].copy()
 
     if valid.empty:
@@ -585,12 +495,6 @@ def main():
 
     # Print cache stats
     if not args.no_cache:
-        try:
-            import nodes.claim_verifier as _cv
-            if _cv._gemini_cache is not None:
-                print(f"\n  Gemini cache: {len(_cv._gemini_cache)} total entries")
-        except (ImportError, AttributeError):
-            pass
         if _llama_cache is not None:
             print(f"  Llama cache:  {len(_llama_cache)} total entries")
 

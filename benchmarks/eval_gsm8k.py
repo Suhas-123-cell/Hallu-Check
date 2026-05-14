@@ -1,20 +1,3 @@
-"""
-hallu-check | benchmarks/eval_gsm8k.py
-Math Reasoning Benchmark (GSM8K)
-
-Evaluates whether the Hallu-Check pipeline (with EGV math verification)
-improves math reasoning accuracy from Llama 3.2-1B on GSM8K.
-
-Methodology:
-  1. Llama generates a solution to each GSM8K problem
-  2. Extract the numerical answer from the output
-  3. Compare against the ground truth answer
-  4. If wrong, EGV + ICR attempt to correct
-  5. Measure accuracy before and after
-
-Usage:
-    python -m benchmarks.eval_gsm8k [--samples 100]
-"""
 from __future__ import annotations
 
 import argparse
@@ -36,7 +19,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def _extract_number(text: str) -> Optional[float]:
-    """Extract the final numerical answer from a text string."""
     # GSM8K format: "#### <number>"
     hash_match = re.search(r"####?\s*([+-]?\d+(?:,\d{3})*(?:\.\d+)?)", text)
     if hash_match:
@@ -60,15 +42,6 @@ def _extract_number(text: str) -> Optional[float]:
 
 
 def evaluate_gsm8k(max_samples: int = 100) -> Dict:
-    """
-    Run GSM8K math benchmark.
-
-    For each problem:
-      1. Generate solution with Llama
-      2. Extract numerical answer
-      3. Compare with ground truth
-      4. If wrong, attempt correction with EGV + refinement
-    """
     from datasets import load_dataset  # type: ignore
     from nodes.generator import generate_llm_output  # type: ignore
 

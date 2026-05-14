@@ -1,16 +1,3 @@
-"""
-hallu-check | nodes/web_search.py
-Nodes 2 & 3 — Keyword Extractor → Web Search → Scraper → Markdown
-
-Node 2: Extract 3-5 concise search keywords from the query using Gemini.
-Node 3: Search the web for those keywords using googlesearch-python,
-        fetch the top URLs, scrape their text, and write everything 
-        to a single Markdown file (needed by PageIndex which reads .md files).
-
-Uses googlesearch-python for web search (no API key needed).
-Includes Name Entity Recognition for better handling of person/place queries.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -40,10 +27,6 @@ from nltk import pos_tag  # type: ignore[import-untyped]
 # Name Entity Recognition (NER) for better query handling
 # ─────────────────────────────────────────────────────────────────────────────
 def extract_entities(text: str) -> dict:
-    """
-    Extract named entities (PERSON, LOCATION, ORGANIZATION) from text.
-    Useful for identifying names and places in queries.
-    """
     try:
         tokens = word_tokenize(text)
         pos_tags = pos_tag(tokens)
@@ -70,9 +53,6 @@ def extract_entities(text: str) -> dict:
 
 
 def has_person_name(keywords: List[str]) -> bool:
-    """
-    Check if any keyword is a person name (using NER).
-    """
     combined = " ".join(keywords)
     entities = extract_entities(combined)
     has_person = len(entities.get("PERSON", [])) > 0
@@ -83,7 +63,6 @@ def has_person_name(keywords: List[str]) -> bool:
 
 
 def _wants_recent_info(query: str | None, keywords: List[str]) -> bool:
-    """Heuristic to detect if user likely needs up-to-date/current information."""
     hay = " ".join([(query or ""), *keywords]).lower()
     freshness_terms = [
         "latest",
@@ -104,10 +83,6 @@ def _wants_recent_info(query: str | None, keywords: List[str]) -> bool:
 
 
 def _wants_factual_origin(query: str | None, keywords: List[str]) -> bool:
-    """
-    Heuristic to detect if the user is asking about origins, inventions,
-    definitions, or historical facts — queries where Wikipedia excels.
-    """
     hay = " ".join([(query or ""), *keywords]).lower()
     origin_terms = [
         "invented", "inventor", "invent",
@@ -131,13 +106,6 @@ def _score_result_recency(
     prefer_recent: bool = False,
     prefer_factual: bool = False,
 ) -> int:
-    """Context-aware domain relevance score for ranking web results.
-
-    Scoring adapts based on query type:
-      - Recency queries: boost news/gov, penalize Wikipedia
-      - Factual/origin queries: boost Wikipedia + encyclopedic sources
-      - Neutral queries: no Wikipedia penalty or boost
-    """
     score = 0
     text = f"{title} {url} {snippet}".lower()
     year_now = datetime.now().year
@@ -196,11 +164,12 @@ _UNSCRAPABLE_DOMAINS = {
     "instagram.com",
     "tiktok.com",
     "pinterest.com",
+    "zhihu.com",       # Chinese Q&A — slow, login-walled, rarely relevant for English queries
+    "quora.com",       # Login-walled, often low quality
 }
 
 
 def _is_unscrapable_domain(url: str) -> bool:
-    """Check if a URL belongs to a login-walled domain that can't be scraped."""
     try:
         netloc = urlparse(url).netloc.lower()
         return any(d in netloc for d in _UNSCRAPABLE_DOMAINS)
@@ -211,11 +180,6 @@ def _is_unscrapable_domain(url: str) -> bool:
 def _search_fallback(
     search_query: str, max_results: int
 ) -> List[Tuple[str, str]]:
-    """
-    Fallback method: Try again with simplified query.
-
-    Used only when the primary search call fails or returns no results.
-    """
     logger.info("Node 3 | Retrying with fallback (simplified query)…")
     results: List[Tuple[str, str]] = []
     seen_urls: set[str] = set()
@@ -244,7 +208,6 @@ from config import HF_API_TOKEN, LOCAL_MODEL_ID  # type: ignore[import-not-found
 
 
 def _hf_extract_keywords(prompt: str) -> str:
-    """Use the HuggingFace / Qwen model for keyword extraction (no Gemini needed)."""
     if not HF_API_TOKEN:
         logger.warning("Node 2 | HF_API_TOKEN not set, cannot extract keywords.")
         return ""
@@ -278,13 +241,70 @@ def _hf_extract_keywords(prompt: str) -> str:
 # ─{70}
 # Node 2 — Keyword Extractor (uses HuggingFace / Qwen)
 # ─{70}
+# ─────────────────────────────────────────────────────────────────────────────
+# Abbreviation Expansion — prevents ambiguous search queries
+# (e.g., "cm" → "Chief Minister" instead of "centimetre")
+# ─────────────────────────────────────────────────────────────────────────────
+_ABBREVIATION_MAP: dict[str, dict] = {
+    "cm":  {"expansion": "Chief Minister",  "context_words": ["minister", "state", "government"]},
+    "pm":  {"expansion": "Prime Minister",  "context_words": ["minister", "country", "government"]},
+    "mp":  {"expansion": "Member of Parliament", "context_words": ["parliament", "lok", "rajya"]},
+    "mla": {"expansion": "Member of Legislative Assembly", "context_words": ["assembly", "legislative"]},
+    "ceo": {"expansion": "Chief Executive Officer", "context_words": ["company", "executive", "officer"]},
+    "cto": {"expansion": "Chief Technology Officer", "context_words": ["technology", "officer"]},
+    "cfo": {"expansion": "Chief Financial Officer", "context_words": ["financial", "officer"]},
+    "gm":  {"expansion": "General Manager", "context_words": ["manager", "general"]},
+    "vp":  {"expansion": "Vice President", "context_words": ["president", "vice"]},
+    "dm":  {"expansion": "District Magistrate", "context_words": ["district", "magistrate"]},
+    "sp":  {"expansion": "Superintendent of Police", "context_words": ["police", "superintendent"]},
+    "ips": {"expansion": "Indian Police Service", "context_words": ["police", "service"]},
+    "ias": {"expansion": "Indian Administrative Service", "context_words": ["administrative", "service"]},
+}
+
+# Indian states / union territories — used to detect political context
+_INDIAN_PLACES = {
+    "manipur", "assam", "bihar", "goa", "gujarat", "haryana", "himachal",
+    "jharkhand", "karnataka", "kerala", "maharashtra", "meghalaya", "mizoram",
+    "nagaland", "odisha", "punjab", "rajasthan", "sikkim", "tamil", "telangana",
+    "tripura", "uttar", "uttarakhand", "bengal", "andhra", "arunachal",
+    "chhattisgarh", "madhya", "delhi", "india", "jammu", "kashmir", "ladakh",
+    "chandigarh", "puducherry", "lakshadweep",
+}
+
+
+def _expand_abbreviations(words: List[str], query: str) -> List[str]:
+    """Expand ambiguous abbreviations when the query context suggests a non-literal meaning."""
+    query_lower = query.lower()
+    expanded = []
+    for word in words:
+        word_lower = word.lower()
+        if word_lower in _ABBREVIATION_MAP:
+            entry = _ABBREVIATION_MAP[word_lower]
+            # Check if query context suggests the abbreviation meaning
+            has_context = any(ctx in query_lower for ctx in entry["context_words"])
+            # For "who is the X of Y" pattern with a place name, expand political abbreviations
+            is_who_query = any(p in query_lower for p in ["who is", "who's", "who was"])
+            # Check for place names (uppercase words or known Indian states)
+            other_words_lower = {w.lower() for w in words if w.lower() != word_lower}
+            has_place = bool(other_words_lower & _INDIAN_PLACES) or any(
+                w[0].isupper() and w.lower() != word_lower
+                for w in words if len(w) > 1
+            )
+
+            if has_context or (is_who_query and has_place):
+                expanded.append(entry["expansion"])
+                logger.info("Node 2 | Expanded abbreviation '%s' → '%s'", word, entry["expansion"])
+                continue
+        expanded.append(word)
+    return expanded
+
+
 @retry(
     stop=stop_after_attempt(2),
     wait=wait_exponential(min=1, max=5),
     reraise=True,
 )
 def _strip_filler_words(words: List[str]) -> List[str]:
-    """Remove common question/filler words, keeping only meaningful terms."""
     filler = {
         "who", "what", "where", "when", "why", "how", "is", "are", "was",
         "were", "the", "a", "an", "of", "in", "on", "at", "to", "for",
@@ -295,16 +315,6 @@ def _strip_filler_words(words: List[str]) -> List[str]:
 
 
 def extract_keywords(query: str) -> List[str]:
-    """
-    Node 2 — extract search-friendly keywords from the query.
-
-    For short/simple queries (≤4 meaningful words), uses the query directly
-    to avoid the LLM mangling names or injecting garbage. For longer queries,
-    uses HuggingFace/Qwen to distill keywords.
-
-    Returns:
-        A list of keyword strings (1-5 items).
-    """
     logger.info("Node 2 | Extracting search keywords from query…")
 
     # Clean the query
@@ -316,6 +326,8 @@ def extract_keywords(query: str) -> List[str]:
     # For short queries (like "sam leteps" or "who is sam leteps"),
     # just use the meaningful words directly — no LLM needed.
     if len(meaningful_words) <= 4:
+        # Expand ambiguous abbreviations (e.g., "cm" → "Chief Minister")
+        meaningful_words = _expand_abbreviations(meaningful_words, query)
         # Use the meaningful words as a single keyword phrase
         # (preserves exact spelling of names)
         keywords = [" ".join(meaningful_words)] if meaningful_words else query_words[:5]
@@ -435,15 +447,6 @@ def extract_keywords(query: str) -> List[str]:
 def _web_search(
     keywords: List[str], max_results: int, query: str | None = None
 ) -> List[Tuple[str, str]]:
-    """
-    Search using ddgs (DuckDuckGo Search, no API key required).
-    Returns (title, url) pairs.
-
-    Strategy:
-      1. Search with the original query first (most reliable for names/entities)
-      2. If that fails, search with extracted keywords
-      3. Final fallback: simplified query (first 3 words)
-    """
     prefer_recent = _wants_recent_info(query, keywords)
     prefer_factual = _wants_factual_origin(query, keywords)
     year_hint = str(datetime.now().year) if prefer_recent else ""
@@ -582,10 +585,6 @@ _LOGIN_WALL_INDICATORS = [
 
 
 def _is_boilerplate_content(text: str, min_sentences: int = 3) -> bool:
-    """
-    Detect login-wall boilerplate, cookie walls, or empty content that
-    shouldn't be indexed.  Returns True if the text is garbage.
-    """
     if not text or len(text.strip()) < 200:
         return True
 
@@ -605,7 +604,6 @@ def _is_boilerplate_content(text: str, min_sentences: int = 3) -> bool:
 
 
 def _extract_clean_text(html_text: str, max_chars: int = 8000) -> str:
-    """Extract clean readable text from HTML."""
     soup = BeautifulSoup(html_text or "", "lxml")
 
     # Remove boilerplate tags
@@ -628,7 +626,6 @@ def _fetch_html(
     mirror_timeout: float = 30.0,
     use_mirror: bool = True,
 ) -> str:
-    """Fetch HTML quickly with optional mirror fallback for blocked pages."""
     headers = {
         "User-Agent": random.choice(
             [
@@ -693,10 +690,6 @@ def _fetch_html(
 
 
 def _scrape_url(url: str, timeout: float = 120.0, use_mirror: bool = True) -> str:
-    """
-    Fetch a URL and extract clean readable text using BeautifulSoup.
-    Returns an empty string on any error.
-    """
     try:
         html_text = _fetch_html(url, timeout=timeout, use_mirror=use_mirror)
         if not html_text:
@@ -725,17 +718,6 @@ def _scrape_url(url: str, timeout: float = 120.0, use_mirror: bool = True) -> st
 
 
 def extract_links(html: str, base_url: str) -> List[Tuple[str, str]]:
-    """
-    Extract all <a> tags from HTML and return (href, anchor_text) pairs.
-    Handles relative URLs by converting them to absolute URLs.
-
-    Args:
-        html: Raw HTML content of a page.
-        base_url: Base URL for resolving relative links.
-
-    Returns:
-        List of tuples: (absolute_url, anchor_text_lowercase).
-    """
     try:
         soup = BeautifulSoup(html, "lxml")
         links = []
@@ -759,24 +741,6 @@ def extract_links(html: str, base_url: str) -> List[Tuple[str, str]]:
 def filter_links_by_keywords(
     links: List[Tuple[str, str]], keywords: List[str], max_links: int = 5
 ) -> List[str]:
-    """
-    STRICT SEMANTIC FILTER: Only keep links where the URL or anchor text
-    contains at least ONE of the original search keywords.
-
-    This prevents context bloat by:
-      1. Checking both URL and anchor text against ALL keywords
-      2. Requiring at least ONE keyword match (AND logic)
-      3. Limiting to max_links to prevent excessive secondary links
-      4. Avoiding duplicates
-
-    Args:
-        links: List of (url, anchor_text) tuples.
-        keywords: Original search keywords.
-        max_links: Maximum number of links to return (default: 5).
-
-    Returns:
-        Filtered list of URLs (up to max_links).
-    """
     core_keywords = set(kw.lower() for kw in keywords)
     filtered = []
 
@@ -801,19 +765,6 @@ def crawl_secondary_content(
     max_secondary_per_page: int = 2,
     primary_html: str | None = None,
 ) -> List[str]:
-    """
-    Visit secondary (linked) pages from a primary page and extract their text.
-    Implements strict semantic filtering and rate limiting.
-
-    Args:
-        primary_url: The primary page URL to extract links from.
-        keywords: Original search keywords for semantic filtering.
-        timeout: HTTP timeout per request (seconds).
-        max_secondary_per_page: Max secondary links to crawl per primary page.
-
-    Returns:
-        List of secondary page texts (empty list if no valid secondary links).
-    """
     secondary_texts = []
 
     try:
@@ -870,21 +821,6 @@ def crawl_secondary_content(
 
 
 def _build_markdown_with_depth2(results: List[dict]) -> str:
-    """
-    Build markdown from consolidated primary + secondary content.
-
-    Each result dict contains:
-      - title: Page title
-      - primary_url: Primary page URL
-      - primary_text: Main text from primary page
-      - secondary_context: List of texts from secondary (linked) pages
-
-    Args:
-        results: List of result dictionaries.
-
-    Returns:
-        Consolidated markdown string ready for PageIndex ingestion.
-    """
     parts: List[str] = ["# Retrieved Web Sources (with Depth-2 Context)\n\n"]
 
     for result in results:
@@ -920,19 +856,6 @@ def _build_markdown_with_depth2(results: List[dict]) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _evaluate_chunk_relevance(text: str, query: str) -> bool:
-    """
-    C-RAG: Evaluate whether a scraped text chunk is relevant to the query.
-
-    Uses Llama 3.2-1B via HuggingFace Inference API to score relevance.
-    A chunk is deemed relevant if the LLM says YES.
-
-    Args:
-        text: The scraped text chunk (truncated for token limits).
-        query: The user's original query.
-
-    Returns:
-        True if the chunk is relevant, False otherwise.
-    """
     if not text or len(text.strip()) < 50:
         return False
 
@@ -977,20 +900,6 @@ def _evaluate_chunk_relevance(text: str, query: str) -> bool:
 
 
 def _rewrite_query(query: str, keywords: List[str]) -> List[str]:
-    """
-    C-RAG: Rewrite the search keywords when initial scrape yields zero
-    relevant chunks.
-
-    Uses Llama 3.2-1B to generate an alternative set of search terms
-    that might retrieve better results.
-
-    Args:
-        query: The user's original query.
-        keywords: The original keywords that failed.
-
-    Returns:
-        A new list of keywords (falls back to original if rewrite fails).
-    """
     logger.info("C-RAG | All chunks irrelevant. Rewriting query…")
 
     prompt = (
@@ -1037,22 +946,6 @@ def _build_markdown(
     texts: List[str],
     query: str | None = None,
 ) -> Tuple[str, bool]:
-    """
-    Combine scraped pages into a single Markdown document with C-RAG filtering.
-    PageIndex reads this file to build its hierarchical tree index.
-
-    When a query is provided, each chunk is evaluated for relevance using
-    the C-RAG evaluator. Irrelevant chunks are discarded.
-
-    Args:
-        results: List of (title, url) tuples.
-        texts: Corresponding scraped text for each result.
-        query: The user's original query (for C-RAG evaluation).
-
-    Returns:
-        Tuple of (markdown_string, all_irrelevant_flag).
-        all_irrelevant_flag is True if every chunk was filtered out.
-    """
     parts: List[str] = ["# Retrieved Web Sources\n\n"]
     kept_count = 0
 
@@ -1088,23 +981,6 @@ def _build_markdown(
 def search_and_scrape_with_depth2(
     keywords: List[str], query: str | None = None, md_path: str | None = None,
 ) -> Tuple[str, str]:
-    """
-    Node 3 — Enhanced search with depth-2 crawling.
-
-    Fetches top 20 results from Google (primary pages), then for each:
-      1. Extracts all linked pages
-      2. Filters by semantic relevance (keyword presence)
-      3. Crawls 3-5 filtered secondary links per primary page
-      4. Consolidates primary + secondary content in markdown
-
-    Args:
-        keywords: Output of Node 2's extract_keywords().
-
-    Returns:
-        Tuple of:
-          - md_path (str): absolute path to the saved Markdown file.
-          - markdown_text (str): the full markdown content with depth-2 context.
-    """
     if not keywords:
         logger.error("Node 3 | No keywords provided")
         raise ValueError("Node 3 requires keywords from Node 2")
@@ -1226,21 +1102,6 @@ def search_and_scrape(
     query: str | None = None,
     md_path: str | None = None,
 ) -> Tuple[str, str]:
-    """
-    Node 3 — search the web, scrape results, and write a Markdown file.
-
-    Supports optional depth-2 crawling for enriched context retrieval.
-
-    Args:
-        keywords: Output of Node 2's extract_keywords().
-        enable_depth2: If True, use depth-2 crawling with secondary link extraction.
-                      If False, use basic depth-1 crawling (faster, less context).
-
-    Returns:
-        Tuple of:
-          - md_path (str): absolute path to the saved Markdown file.
-          - markdown_text (str): the full markdown content.
-    """
     if enable_depth2:
         return search_and_scrape_with_depth2(keywords, query=query, md_path=md_path)
 
@@ -1357,31 +1218,6 @@ def targeted_gap_search(
     query: str,
     max_results_per_claim: int = 3,
 ) -> str:
-    """
-    Lightweight targeted search to fill knowledge gaps for unverifiable claims.
-
-    When Node 5 (claim verification) finds UNVERIFIABLE claims, this function
-    performs focused searches specifically for the missing information, then
-    returns supplementary context as a markdown string.
-
-    IMPORTANT: We search using the ORIGINAL USER QUERY, not the hallucinated
-    claims. The claims are from the LLM's wrong answer — using them as search
-    queries would just find more wrong information.
-
-    This is much lighter than a full search_and_scrape():
-      - No depth-2 crawling
-      - No C-RAG evaluation
-      - No PageIndex tree building
-      - Just quick DuckDuckGo search + scrape for the specific gaps
-
-    Args:
-        unverifiable_claims: List of claim strings that couldn't be verified.
-        query: The user's original query (for context).
-        max_results_per_claim: Max search results to fetch per search query.
-
-    Returns:
-        Supplementary context as a markdown string (may be empty if nothing found).
-    """
     if not unverifiable_claims:
         return ""
 

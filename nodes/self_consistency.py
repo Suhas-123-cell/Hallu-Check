@@ -1,20 +1,3 @@
-"""
-hallu-check | nodes/self_consistency.py
-Node 1.5 — Self-Consistency Checking
-
-Generates multiple LLM answers at varied temperatures and checks
-agreement using NLI. This catches a large class of hallucinations
-cheaply — no web search needed.
-
-Architecture:
-  1. Generate N answers (default=3) at temperatures [0.1, 0.5, 0.9]
-  2. For each pair of answers, compute NLI entailment probability
-  3. consistency_score = mean pairwise entailment probability
-  4. Extract "consensus claims" (facts that appear in majority of answers)
-
-High consistency (>0.85) → claims are likely correct, lower priority for verification
-Low consistency (<0.5) → high-risk, proceed with full pipeline
-"""
 from __future__ import annotations
 
 import logging
@@ -36,7 +19,6 @@ _TEMPERATURES = [0.1, 0.5, 0.9, 0.3, 0.7]
 
 
 def _generate_answer(query: str, temperature: float, timeout: int = 120) -> str:
-    """Generate a single LLM answer at a specific temperature."""
     if not HF_API_TOKEN:
         return ""
 
@@ -74,25 +56,6 @@ def check_self_consistency(
     primary_answer: str,
     n_samples: int | None = None,
 ) -> Dict:
-    """
-    Node 1.5 — Self-Consistency Checking.
-
-    Generates additional answers at varied temperatures and measures
-    agreement with the primary answer using NLI.
-
-    Args:
-        query: The user's query.
-        primary_answer: The answer from Node 1 (temperature=0.3).
-        n_samples: Number of additional samples (default from config).
-
-    Returns:
-        Dict with:
-          - consistency_score: float (0.0 = total disagreement, 1.0 = perfect)
-          - is_consistent: bool (True if score > 0.85)
-          - is_high_risk: bool (True if score < 0.5)
-          - sample_count: int (number of samples + primary)
-          - pairwise_scores: list of pairwise entailment probabilities
-    """
     n = n_samples or N_CONSISTENCY_SAMPLES
     temperatures = _TEMPERATURES[:n]
 
@@ -175,7 +138,6 @@ def check_self_consistency(
 
 
 def _word_overlap_consistency(answers: List[str]) -> List[float]:
-    """Fallback: compute pairwise word overlap as consistency proxy."""
     scores: List[float] = []
     for i in range(len(answers)):
         for j in range(i + 1, len(answers)):

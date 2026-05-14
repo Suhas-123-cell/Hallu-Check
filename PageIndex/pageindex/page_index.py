@@ -492,10 +492,6 @@ def add_page_number_to_toc(part, structure, model=None):
 
 
 def remove_first_physical_index_section(text):
-    """
-    Removes the first section between <physical_index_X> and <physical_index_X> tags,
-    and returns the remaining text.
-    """
     pattern = r'<physical_index_\d+>.*?<physical_index_\d+>'
     match = re.search(pattern, text, re.DOTALL)
     if match:
@@ -1122,10 +1118,6 @@ def page_index(doc, model=None, toc_check_page_num=None, max_page_num_each_node=
 
 
 def validate_and_truncate_physical_indices(toc_with_page_number, page_list_length, start_index=1, logger=None):
-    """
-    Validates and truncates physical indices that exceed the actual document length.
-    This prevents errors when TOC references pages that don't exist in the document (e.g. the file is broken or incomplete).
-    """
     if not toc_with_page_number:
         return toc_with_page_number
     

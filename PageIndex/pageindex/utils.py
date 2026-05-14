@@ -323,7 +323,6 @@ class JsonLogger:
 
 def list_to_tree(data):
     def get_parent_structure(structure):
-        """Helper function to get the parent structure code"""
         if not structure:
             return None
         parts = str(structure).split('.')
@@ -597,10 +596,6 @@ async def generate_summaries_for_structure(structure, model=None):
 
 
 def create_clean_structure_for_description(structure):
-    """
-    Create a clean structure for document description generation,
-    excluding unnecessary fields like 'text'.
-    """
     if isinstance(structure, dict):
         clean_node = {}
         # Only include essential fields for description
@@ -668,9 +663,6 @@ class ConfigLoader:
             raise ValueError(f"Unknown config keys: {unknown_keys}")
 
     def load(self, user_opt=None) -> config:
-        """
-        Load the configuration, merging user options with default values.
-        """
         if user_opt is None:
             user_dict = {}
         elif isinstance(user_opt, config):
@@ -685,7 +677,6 @@ class ConfigLoader:
         return config(**merged)
 
 def create_node_mapping(tree):
-    """Create a flat dict mapping node_id to node for quick lookup."""
     mapping = {}
     def _traverse(nodes):
         for node in nodes:

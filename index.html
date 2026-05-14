@@ -1,0 +1,1883 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NLP Exam Crash Course 🚀</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Sora:wght@300;600;800&display=swap');
+
+        :root {
+            --bg: #0a0e1a;
+            --card: #111827;
+            --accent1: #00e5ff;
+            --accent2: #ff6b6b;
+            --accent3: #a78bfa;
+            --accent4: #34d399;
+            --text: #e2e8f0;
+            --muted: #94a3b8;
+            --border: #1e293b;
+            --code-bg: #0d1117;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Sora', sans-serif;
+            font-size: 15px;
+            line-height: 1.7;
+        }
+
+        /* HEADER */
+        header {
+            background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
+            border-bottom: 1px solid var(--accent3);
+            padding: 2rem 2rem 1.5rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 4px 30px rgba(167, 139, 250, 0.15);
+        }
+
+        .header-inner {
+            max-width: 1100px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 800;
+            color: var(--accent1);
+            letter-spacing: -0.5px;
+        }
+
+        .logo span {
+            color: var(--accent3);
+        }
+
+        .timer-badge {
+            background: rgba(255, 107, 107, 0.15);
+            border: 1px solid var(--accent2);
+            color: var(--accent2);
+            padding: 0.3rem 0.9rem;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1
+            }
+
+            50% {
+                opacity: 0.6
+            }
+        }
+
+        /* MAIN NAV TABS */
+        .tabs-nav {
+            background: var(--card);
+            border-bottom: 1px solid var(--border);
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+
+        .tabs-nav::-webkit-scrollbar {
+            display: none;
+        }
+
+        .tabs-nav-inner {
+            max-width: 1100px;
+            margin: 0 auto;
+            display: flex;
+            gap: 0;
+        }
+
+        .tab-btn {
+            background: none;
+            border: none;
+            padding: 1rem 1.4rem;
+            cursor: pointer;
+            color: var(--muted);
+            font-family: 'Sora', sans-serif;
+            font-size: 0.82rem;
+            font-weight: 600;
+            white-space: nowrap;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+            letter-spacing: 0.3px;
+        }
+
+        .tab-btn:hover {
+            color: var(--text);
+        }
+
+        .tab-btn.active {
+            color: var(--accent1);
+            border-bottom-color: var(--accent1);
+        }
+
+        /* CONTENT */
+        .content {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem 4rem;
+        }
+
+        .tab-panel {
+            display: none;
+        }
+
+        .tab-panel.active {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(8px)
+            }
+
+            to {
+                opacity: 1;
+                transform: none
+            }
+        }
+
+        /* SECTION HEADINGS */
+        h1 {
+            font-size: 2rem;
+            font-weight: 800;
+            margin-bottom: 0.4rem;
+        }
+
+        h2 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            margin: 2rem 0 0.8rem;
+            color: var(--accent1);
+        }
+
+        h3 {
+            font-size: 1rem;
+            font-weight: 700;
+            margin: 1.4rem 0 0.5rem;
+            color: var(--accent3);
+        }
+
+        p {
+            margin-bottom: 0.8rem;
+            color: var(--text);
+        }
+
+        .subtitle {
+            color: var(--muted);
+            font-size: 0.9rem;
+            margin-bottom: 2rem;
+        }
+
+        /* CARDS */
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1.2rem 1.4rem;
+            margin-bottom: 1rem;
+        }
+
+        .card-accent-blue {
+            border-left: 3px solid var(--accent1);
+        }
+
+        .card-accent-purple {
+            border-left: 3px solid var(--accent3);
+        }
+
+        .card-accent-red {
+            border-left: 3px solid var(--accent2);
+        }
+
+        .card-accent-green {
+            border-left: 3px solid var(--accent4);
+        }
+
+        /* GRID */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1rem;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1rem;
+        }
+
+        /* CODE BLOCKS */
+        pre {
+            background: var(--code-bg);
+            border: 1px solid #2d3748;
+            border-radius: 8px;
+            padding: 1rem 1.2rem;
+            overflow-x: auto;
+            margin: 0.8rem 0;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.78rem;
+            line-height: 1.6;
+        }
+
+        code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.82em;
+        }
+
+        .kw {
+            color: #ff79c6;
+        }
+
+        .fn {
+            color: #50fa7b;
+        }
+
+        .str {
+            color: #f1fa8c;
+        }
+
+        .cm {
+            color: #6272a4;
+        }
+
+        .num {
+            color: #bd93f9;
+        }
+
+        .cls {
+            color: #8be9fd;
+        }
+
+        /* TAGS / BADGES */
+        .tag {
+            display: inline-block;
+            padding: 0.15rem 0.55rem;
+            border-radius: 4px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            margin-right: 0.3rem;
+        }
+
+        .tag-blue {
+            background: rgba(0, 229, 255, 0.12);
+            color: var(--accent1);
+        }
+
+        .tag-purple {
+            background: rgba(167, 139, 250, 0.12);
+            color: var(--accent3);
+        }
+
+        .tag-red {
+            background: rgba(255, 107, 107, 0.12);
+            color: var(--accent2);
+        }
+
+        .tag-green {
+            background: rgba(52, 211, 153, 0.12);
+            color: var(--accent4);
+        }
+
+        /* KEY POINT */
+        .key-point {
+            background: rgba(0, 229, 255, 0.06);
+            border: 1px solid rgba(0, 229, 255, 0.2);
+            border-radius: 8px;
+            padding: 0.9rem 1.1rem;
+            margin: 0.7rem 0;
+        }
+
+        .key-point::before {
+            content: "★ KEY POINT: ";
+            color: var(--accent1);
+            font-weight: 700;
+            font-size: 0.75rem;
+        }
+
+        /* ALERT BOX */
+        .alert {
+            background: rgba(255, 107, 107, 0.07);
+            border: 1px solid rgba(255, 107, 107, 0.25);
+            border-radius: 8px;
+            padding: 0.9rem 1.1rem;
+            margin: 0.7rem 0;
+        }
+
+        .alert::before {
+            content: "⚠ EXAM TIP: ";
+            color: var(--accent2);
+            font-weight: 700;
+            font-size: 0.75rem;
+        }
+
+        /* TABLE */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 0.8rem 0;
+            font-size: 0.85rem;
+        }
+
+        th {
+            background: #1e293b;
+            color: var(--accent1);
+            padding: 0.6rem 0.9rem;
+            text-align: left;
+            font-size: 0.8rem;
+            letter-spacing: 0.5px;
+        }
+
+        td {
+            padding: 0.55rem 0.9rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text);
+        }
+
+        tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        /* FORMULA BOX */
+        .formula {
+            background: #0d1117;
+            border: 1px solid var(--accent3);
+            border-radius: 8px;
+            padding: 0.8rem 1.2rem;
+            margin: 0.7rem 0;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            color: var(--accent3);
+            text-align: center;
+        }
+
+        /* STEPS */
+        .steps {
+            list-style: none;
+            counter-reset: step;
+        }
+
+        .steps li {
+            counter-increment: step;
+            padding: 0.6rem 0.6rem 0.6rem 3rem;
+            position: relative;
+            margin-bottom: 0.5rem;
+            background: var(--card);
+            border-radius: 8px;
+        }
+
+        .steps li::before {
+            content: counter(step);
+            position: absolute;
+            left: 0.8rem;
+            top: 50%;
+            transform: translateY(-50%);
+            background: var(--accent3);
+            color: var(--bg);
+            width: 1.5rem;
+            height: 1.5rem;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 0.75rem;
+        }
+
+        ul.bullets {
+            padding-left: 1.3rem;
+        }
+
+        ul.bullets li {
+            margin-bottom: 0.4rem;
+            color: var(--text);
+        }
+
+        /* ACCORDION */
+        .accordion {
+            margin-bottom: 0.5rem;
+        }
+
+        .acc-header {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.9rem 1.2rem;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+
+        .acc-header:hover {
+            background: #1e293b;
+        }
+
+        .acc-header .arrow {
+            transition: transform 0.3s;
+            color: var(--accent1);
+        }
+
+        .acc-header.open .arrow {
+            transform: rotate(180deg);
+        }
+
+        .acc-body {
+            display: none;
+            background: #0f1923;
+            border: 1px solid var(--border);
+            border-top: none;
+            border-radius: 0 0 8px 8px;
+            padding: 1rem 1.2rem;
+        }
+
+        .acc-body.open {
+            display: block;
+        }
+
+        /* QUICK REF */
+        .quick-ref-row {
+            display: flex;
+            gap: 0.5rem;
+            align-items: flex-start;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .quick-ref-row:last-child {
+            border-bottom: none;
+        }
+
+        .qr-key {
+            min-width: 160px;
+            color: var(--accent1);
+            font-weight: 600;
+            font-size: 0.85rem;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .qr-val {
+            color: var(--text);
+            font-size: 0.85rem;
+        }
+
+        /* PHASE FLOW */
+        .phase-flow {
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+        }
+
+        .phase-step {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 0.8rem 1rem;
+            background: var(--card);
+            border-radius: 8px;
+            margin-bottom: 2px;
+            position: relative;
+        }
+
+        .phase-num {
+            background: var(--accent3);
+            color: var(--bg);
+            width: 2rem;
+            height: 2rem;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 0.8rem;
+            flex-shrink: 0;
+        }
+
+        .phase-arrow {
+            text-align: center;
+            color: var(--accent3);
+            font-size: 1.2rem;
+            margin: -2px 0;
+        }
+
+        /* SCROLLTOP */
+        .scroll-top {
+            position: fixed;
+            bottom: 1.5rem;
+            right: 1.5rem;
+            background: var(--accent3);
+            color: var(--bg);
+            width: 2.5rem;
+            height: 2.5rem;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 1rem;
+            z-index: 200;
+            box-shadow: 0 4px 15px rgba(167, 139, 250, 0.4);
+            transition: transform 0.2s;
+        }
+
+        .scroll-top:hover {
+            transform: translateY(-3px);
+        }
+
+        hr {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 1.5rem 0;
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <div class="header-inner">
+            <div class="logo">NLP<span>CrashCourse</span></div>
+            <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap;">
+                <span class="tag tag-green">5 Topics Covered</span>
+                <span class="timer-badge">⏱ Exam in ~3hrs — You Got This!</span>
+            </div>
+        </div>
+    </header>
+
+    <div class="tabs-nav">
+        <div class="tabs-nav-inner">
+            <button class="tab-btn active" onclick="switchTab('intro')">1. Intro & Basics</button>
+            <button class="tab-btn" onclick="switchTab('ambiguity')">2. Ambiguity</button>
+            <button class="tab-btn" onclick="switchTab('normalization')">3. Text Normalization</button>
+            <button class="tab-btn" onclick="switchTab('ngram')">4. N-gram & LM</button>
+            <button class="tab-btn" onclick="switchTab('morphology')">5. Morphology</button>
+            <button class="tab-btn" onclick="switchTab('regex')">6. Regular Expressions</button>
+        </div>
+    </div>
+
+    <div class="content">
+
+        <!-- ==================== TAB 1: INTRO ==================== -->
+        <div class="tab-panel active" id="tab-intro">
+            <h1>Introduction to NLP</h1>
+            <p class="subtitle">What is NLP? Language forms, Turing test, phases, applications</p>
+
+            <h2>What is NLP?</h2>
+            <div class="card card-accent-blue">
+                <p><strong>Natural Language Processing (NLP)</strong> is a field of computer science that focuses on
+                    making <em>artificial agents</em> understand and work with human languages using computational
+                    techniques to read, interpret, and generate language in a way that feels natural to people.</p>
+                <div class="key-point">NLP is interdisciplinary — it combines Computational Linguistics, AI, Statistics,
+                    Mathematics, and Signal Processing.</div>
+            </div>
+
+            <div class="grid-2">
+                <div class="card card-accent-purple">
+                    <h3>Computational Linguistics (CL)</h3>
+                    <p>Scientific study of language using computational methods. Tries to understand <em>how language is
+                            structured</em> and how humans use it.</p>
+                </div>
+                <div class="card card-accent-green">
+                    <h3>NLP vs CL</h3>
+                    <p>NLP focuses on <em>creating products</em> using CL that help artificial agents
+                        understand/interpret/generate language. In practice, CL and NLP terms are used interchangeably.
+                    </p>
+                </div>
+            </div>
+
+            <h2>Classification of Languages</h2>
+            <table>
+                <tr>
+                    <th>Type</th>
+                    <th>Subtypes</th>
+                    <th>Examples</th>
+                </tr>
+                <tr>
+                    <td><strong>Natural Languages</strong></td>
+                    <td>Based on language family</td>
+                    <td>Hindi, Bengali, Tamil, English, Manipuri</td>
+                </tr>
+                <tr>
+                    <td><strong>Constructed Languages</strong></td>
+                    <td>Artificially designed</td>
+                    <td>Esperanto (1887, L.L. Zamenhof), Klingon (Star Trek), Dothraki, Na'vi</td>
+                </tr>
+                <tr>
+                    <td><strong>Programming Languages</strong></td>
+                    <td>Low/Mid/High-level</td>
+                    <td>Assembly, C, Python, JavaScript</td>
+                </tr>
+            </table>
+
+            <div class="alert">Not all human languages are natural! Esperanto (1887) was created for easy cross-cultural
+                communication. Klingon was created for Star Trek (1967). These are likely exam questions!</div>
+
+            <h2>Three Forms of Language</h2>
+            <div class="grid-3">
+                <div class="card card-accent-blue">
+                    <h3>📝 Text</h3>
+                    <ul class="bullets">
+                        <li>Written form using characters/symbols</li>
+                        <li>Set of symbols = <strong>Script</strong></li>
+                        <li>Only 40% of world languages have a script</li>
+                        <li>One language → multiple scripts (e.g., Manipuri uses Bengali-Assamese and Meitei Mayek)</li>
+                        <li>One script → multiple languages (e.g., Latin script: English, French, Spanish)</li>
+                        <li>Encoded via ASCII, ISCII, UTF-8</li>
+                    </ul>
+                </div>
+                <div class="card card-accent-purple">
+                    <h3>🎙 Speech</h3>
+                    <ul class="bullets">
+                        <li>Time-varying acoustic waveform (pressure variations)</li>
+                        <li>Features: Pitch, Loudness, Speed</li>
+                        <li>Sampled at fixed rate (e.g., 16 kHz)</li>
+                        <li>Frames of 20–30 ms assumed quasi-stationary</li>
+                        <li>Represented using MFCC (Mel-Frequency Cepstral Coefficients)</li>
+                        <li>Prosodic features: pitch, energy, duration</li>
+                    </ul>
+                </div>
+                <div class="card card-accent-green">
+                    <h3>🤚 Gesture</h3>
+                    <ul class="bullets">
+                        <li>Body movement (spatio-temporal stream)</li>
+                        <li>Sequence of poses over time</li>
+                        <li>Types: Hand, body posture, facial, head movement</li>
+                        <li>Sensors: RGB/Kinect cameras, accelerometers, data gloves</li>
+                        <li>Pipeline: Input → Preprocessing → Keypoint Detection → Feature Extraction → Temporal
+                            Modeling → Classification</li>
+                    </ul>
+                </div>
+            </div>
+
+            <h2>Phases of NLP</h2>
+            <div class="phase-flow">
+                <div class="phase-step">
+                    <div class="phase-num">1</div>
+                    <div><strong>Lexical Analysis</strong> — Raw text → Tokens (words, punctuation). Deals with words
+                        and their meanings.</div>
+                </div>
+                <div class="phase-arrow">↓</div>
+                <div class="phase-step">
+                    <div class="phase-num">2</div>
+                    <div><strong>Syntactic Analysis (Parsing)</strong> — Tokens → Structural Representation. Checks
+                        grammar rules.</div>
+                </div>
+                <div class="phase-arrow">↓</div>
+                <div class="phase-step">
+                    <div class="phase-num">3</div>
+                    <div><strong>Semantic Analysis</strong> — Structure → Meaning Representation. What does it mean?
+                    </div>
+                </div>
+                <div class="phase-arrow">↓</div>
+                <div class="phase-step">
+                    <div class="phase-num">4</div>
+                    <div><strong>Discourse Analysis</strong> — Meaning → Context Representation. How sentences relate to
+                        each other.</div>
+                </div>
+                <div class="phase-arrow">↓</div>
+                <div class="phase-step">
+                    <div class="phase-num">5</div>
+                    <div><strong>Pragmatic Analysis</strong> — Context → Intended Meaning. What was the speaker's actual
+                        intent?</div>
+                </div>
+            </div>
+
+            <h2>The Turing Test & CAPTCHA</h2>
+            <div class="grid-2">
+                <div class="card card-accent-blue">
+                    <h3>Turing Test (Alan Turing, 1950)</h3>
+                    <p>Tests whether a machine can exhibit intelligent behaviour indistinguishable from a human.</p>
+                    <ul class="bullets">
+                        <li>3 terminals: 1 computer + 2 humans, physically separated</li>
+                        <li>Text-only communication</li>
+                        <li>Human interrogator asks both the human respondent and AI respondent questions</li>
+                        <li>If interrogator cannot distinguish AI from human → AI passes</li>
+                        <li>ELIZA (1966) was the first chatbot said to pass the Turing test</li>
+                    </ul>
+                    <div class="key-point">Originally called the "Imitation Game"</div>
+                </div>
+                <div class="card card-accent-red">
+                    <h3>Chinese Room Argument (John Searle, 1980)</h3>
+                    <p>Criticism of the Turing Test.</p>
+                    <ul class="bullets">
+                        <li>An English speaker in a room follows rules to respond in Chinese without understanding
+                            Chinese</li>
+                        <li>Looks intelligent from outside, but has no understanding inside</li>
+                        <li>Conclusion: Passing Turing Test ≠ genuine intelligence</li>
+                        <li>Led to: <strong>Weak AI</strong> (simulates understanding) vs <strong>Strong AI</strong>
+                            (truly thinks like a human)</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="card card-accent-purple">
+                <h3>Reverse Turing Test → CAPTCHA</h3>
+                <p>Here a <em>machine</em> determines if the responder is human or bot. Purpose: prevent spam, fake
+                    accounts, DoS attacks.</p>
+                <p><strong>CAPTCHA</strong> = Completely Automated Public Turing test to tell Computers and Humans
+                    Apart. Tasks easy for humans, hard for bots (distorted text, image selection, pattern recognition).
+                </p>
+            </div>
+
+            <div class="card card-accent-green">
+                <h3>Other Turing-like Tests</h3>
+                <table>
+                    <tr>
+                        <th>Test</th>
+                        <th>Who</th>
+                        <th>What it tests</th>
+                    </tr>
+                    <tr>
+                        <td>Lovelace Test 2.0 (2014)</td>
+                        <td>Mark O. Riedl</td>
+                        <td>Creativity — AI produces artifacts exceeding designer's intentions</td>
+                    </tr>
+                    <tr>
+                        <td>Coffee Test (2010)</td>
+                        <td>Steve Wozniak</td>
+                        <td>General intelligence — robot makes coffee in an unfamiliar house</td>
+                    </tr>
+                    <tr>
+                        <td>Ebert Test (2011)</td>
+                        <td>Roger Ebert</td>
+                        <td>Can a synthesized voice tell jokes with human timing/inflection?</td>
+                    </tr>
+                </table>
+            </div>
+
+            <h2>Key NLP Applications</h2>
+            <div class="grid-2">
+                <div class="card">
+                    <h3>🌍 Machine Translation</h3>
+                    <p>Rule-based → Statistical → Neural MT (encoder-decoder with Transformers). Google Translate,
+                        DeepL.</p>
+                </div>
+                <div class="card">
+                    <h3>🤖 Chatbots</h3>
+                    <p>ELIZA (1966) → PARRY (1972) → ALICE (1995, AIML) → ChatGPT (2020, Transformer-based).</p>
+                </div>
+                <div class="card">
+                    <h3>🔊 TTS & ASR</h3>
+                    <p>Text-to-Speech: Tacotron, FastSpeech. Automatic Speech Recognition: HMM/DNN + Viterbi decoding.
+                    </p>
+                </div>
+                <div class="card">
+                    <h3>🔎 Information Extraction</h3>
+                    <p>Named Entity Recognition (person, org, date), Event extraction, Opinion mining.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== TAB 2: AMBIGUITY ==================== -->
+        <div class="tab-panel" id="tab-ambiguity">
+            <h1>Ambiguity in Language</h1>
+            <p class="subtitle">Why is processing language so complex? Types of ambiguity you MUST know.</p>
+
+            <div class="card card-accent-red">
+                <h3>Why is Language Processing Complex?</h3>
+                <ul class="bullets">
+                    <li>Patterns change with language, person, context, locality</li>
+                    <li>New words appear constantly (selfie, ghosted, influencer)</li>
+                    <li>Word meanings shift over time: <em>mouse</em> (animal → computer), <em>cloud</em> (sky →
+                        storage), <em>gay</em> (joyful → LGBTQ+), <em>villain</em> (farm worker → bad guy)</li>
+                    <li><strong>Ambiguity</strong>: word/phrase/sentence has more than one meaning due to flexible,
+                        context-dependent nature of language</li>
+                </ul>
+            </div>
+
+            <h2>1. Lexical Ambiguity</h2>
+            <div class="card card-accent-blue">
+                <p>A single word has <em>multiple meanings</em>. Caused by:</p>
+                <div class="grid-2">
+                    <div>
+                        <h3>Homonymy</h3>
+                        <p>Same form/sound, <strong>different unrelated meanings and origin</strong></p>
+                        <ul class="bullets">
+                            <li>bank → financial bank OR river bank</li>
+                            <li>bat → animal OR cricket bat</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <h3>Polysemy</h3>
+                        <p>Same word, <strong>multiple related meanings</strong></p>
+                        <ul class="bullets">
+                            <li>star → celestial body OR celebrity</li>
+                            <li>cricket bat vs baseball bat (both related to sports)</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <h2>2. Syntactic Ambiguity</h2>
+            <div class="card card-accent-purple">
+                <p>Grammar allows <em>more than one valid structure</em>. The same words in the same order can be parsed
+                    differently.</p>
+                <table>
+                    <tr>
+                        <th>Sentence</th>
+                        <th>Interpretation 1</th>
+                        <th>Interpretation 2</th>
+                    </tr>
+                    <tr>
+                        <td>"I saw the man with the telescope"</td>
+                        <td>I used a telescope to see</td>
+                        <td>The man had a telescope</td>
+                    </tr>
+                    <tr>
+                        <td>"The old men and women are evacuated"</td>
+                        <td>Both old men and women</td>
+                        <td>Only the men are old</td>
+                    </tr>
+                    <tr>
+                        <td>"The small flower garden"</td>
+                        <td>The garden is small</td>
+                        <td>The flowers are small</td>
+                    </tr>
+                </table>
+                <div class="key-point">Prepositional phrases, adverbial phrases, and relative clauses are common sources
+                    of syntactic ambiguity because they can attach to either the noun or the verb.</div>
+            </div>
+
+            <h2>3. Semantic Ambiguity</h2>
+            <div class="card card-accent-green">
+                <p>Structure is clear, but <em>the meaning is not</em>. Even grammatically correct sentences have
+                    unclear intended meaning.</p>
+                <table>
+                    <tr>
+                        <th>Example</th>
+                        <th>Ambiguity</th>
+                    </tr>
+                    <tr>
+                        <td>"Amal called Bimal because <em>he</em> was tired"</td>
+                        <td>Who is 'he'? Amal or Bimal? (pronoun reference)</td>
+                    </tr>
+                    <tr>
+                        <td>"I went to the bank"</td>
+                        <td>Financial bank or riverbank? (homonymy)</td>
+                    </tr>
+                    <tr>
+                        <td>"Only she told him that she loved him"</td>
+                        <td>Scope of 'only' changes meaning completely</td>
+                    </tr>
+                    <tr>
+                        <td>"Flying planes can be dangerous"</td>
+                        <td>Act of flying (gerund) OR planes that are flying (participle)</td>
+                    </tr>
+                </table>
+                <div class="alert">Gerund vs Participle is a common exam question: Gerund (-ing) acts as a NOUN
+                    ("Swimming is fun"). Participle (-ing) acts as an ADJECTIVE ("Swimming in the river, he felt
+                    refreshed").</div>
+            </div>
+
+            <h2>Combined Syntactic + Semantic Ambiguity</h2>
+            <div class="card">
+                <p>When both structural AND meaning ambiguity occur together, NLP becomes extremely complex. A single
+                    Telugu sentence like <em>"vaadu koncem gelichina pettukunnaadu"</em> can have 4+ different meanings
+                    because 'koncem' (small amount) can modify different parts AND 'pettu' can mean keep/bet/wear.</p>
+                <div class="key-point">This is why NLP is hard — natural language is flexible, context-dependent, and
+                    inherently ambiguous at multiple levels simultaneously.</div>
+            </div>
+        </div>
+
+        <!-- ==================== TAB 3: TEXT NORMALIZATION ==================== -->
+        <div class="tab-panel" id="tab-normalization">
+            <h1>Text Normalization</h1>
+            <p class="subtitle">Converting text into a standard, consistent format — with all the Python code</p>
+
+            <div class="card card-accent-blue">
+                <h3>What is Text Normalization?</h3>
+                <p>Process of converting text into a standard, consistent format to improve quality and make it easier
+                    for machines to process. Creates an <strong>equivalence class of units</strong>.</p>
+                <p><strong>Why needed?</strong> Natural language is highly inconsistent: color vs colour, THE vs The vs
+                    the, can't vs cannot, thnx vs thanks, etc.</p>
+                <div class="key-point">Without normalization, ML models misinterpret variations of the same word,
+                    leading to lower accuracy in search engines, chatbots, etc.</div>
+            </div>
+
+            <h2>Technique 1: Case Folding</h2>
+            <div class="card">
+                <p>Convert mixed-case text to one case (usually lowercase).</p>
+                <pre><code><span class="kw">text</span> = <span class="str">"Hello World!"</span>
+<span class="fn">normalized_text</span> = text.<span class="fn">lower</span>()
+<span class="cm"># Output: "hello world!"</span></code></pre>
+                <p><strong>True-casing</strong>: Restoring correct capitalization (e.g., the → The at sentence start).
+                    Important for search engines, chatbots, translation.</p>
+            </div>
+
+            <h2>Technique 2: Contraction Expansion</h2>
+            <div class="card">
+                <p>Expand shortened word forms to their full forms: can't → cannot, I'll → I will, I'm → I am.</p>
+                <pre><code><span class="kw">import</span> re
+contractionDict = {<span class="str">"can't"</span>: <span class="str">"cannot"</span>, <span class="str">"I'm"</span>: <span class="str">"I am"</span>, <span class="str">"it's"</span>: <span class="str">"it is"</span>}
+
+<span class="kw">def</span> <span class="fn">expandContraction</span>(text, contractionDict):
+    pattern = re.<span class="fn">compile</span>(r<span class="str">'\b('</span> + <span class="str">'|'</span>.<span class="fn">join</span>(contractionDict.keys()) + r<span class="str">')\b'</span>)
+    <span class="kw">return</span> pattern.<span class="fn">sub</span>(<span class="kw">lambda</span> x: contractionDict[x.group()], text)
+
+<span class="fn">print</span>(<span class="fn">expandContraction</span>(<span class="str">"I'm happy because it's a sunny day"</span>, contractionDict))
+<span class="cm"># Output: "I am happy because it is a sunny day"</span></code></pre>
+            </div>
+
+            <h2>Technique 3: Spelling Variations</h2>
+            <div class="card">
+                <p>Handle regional differences (colour → color, theatre → theater). Uses a predefined mapping
+                    dictionary.</p>
+                <pre><code>spelling_variations = {<span class="str">"colour"</span>: <span class="str">"color"</span>, <span class="str">"theatre"</span>: <span class="str">"theater"</span>}
+
+<span class="kw">def</span> <span class="fn">normalize_spelling</span>(text, variations):
+    words = text.<span class="fn">split</span>()
+    <span class="kw">return</span> <span class="str">" "</span>.<span class="fn">join</span>([variations.<span class="fn">get</span>(word, word) <span class="kw">for</span> word <span class="kw">in</span> words])
+
+<span class="cm"># Using TextBlob library</span>
+<span class="kw">from</span> textblob <span class="kw">import</span> <span class="cls">TextBlob</span>
+corrected = <span class="fn">str</span>(<span class="cls">TextBlob</span>(text).<span class="fn">correct</span>())</code></pre>
+            </div>
+
+            <h2>Technique 4: Spelling Correction</h2>
+            <div class="card">
+                <p>Correct typos (definately → definitely, recieved → received).</p>
+                <pre><code><span class="kw">from</span> spellchecker <span class="kw">import</span> <span class="cls">SpellChecker</span>
+spell = <span class="cls">SpellChecker</span>()
+text = <span class="str">"I definately recieved the anouncement yesturday."</span>
+words = text.<span class="fn">split</span>()
+corrected_text = <span class="str">" "</span>.<span class="fn">join</span>([
+    spell.<span class="fn">correction</span>(word) <span class="kw">if</span> word <span class="kw">in</span> spell.<span class="fn">unknown</span>(words) <span class="kw">else</span> word
+    <span class="kw">for</span> word <span class="kw">in</span> words
+])
+
+<span class="cm"># Fuzzy matching approach</span>
+<span class="kw">from</span> fuzzywuzzy <span class="kw">import</span> process
+best_match = process.<span class="fn">extractOne</span>(<span class="str">"accomodate"</span>, [<span class="str">"accommodate"</span>, <span class="str">"recommend"</span>])</code></pre>
+                <div class="key-point">Algorithms used: Levenshtein edit distance, Damerau-Levenshtein, Jaccard
+                    similarity, Soundex. The Viterbi algorithm is a probabilistic extension of minimum edit distance.
+                </div>
+            </div>
+
+            <h2>Technique 5: Punctuation Removal</h2>
+            <div class="card">
+                <pre><code><span class="kw">import</span> re
+text = <span class="str">"Hello, world! How's it going?"</span>
+cleanText = re.<span class="fn">sub</span>(r<span class="str">'[^\w\s]'</span>, <span class="str">''</span>, text)
+<span class="cm"># Output: "Hello world Hows it going"</span>
+
+<span class="cm"># Using NLTK tokenization</span>
+<span class="kw">from</span> nltk.tokenize <span class="kw">import</span> word_tokenize
+tokens = <span class="fn">word_tokenize</span>(text)
+cleanTokens = [word <span class="kw">for</span> word <span class="kw">in</span> tokens <span class="kw">if</span> word.<span class="fn">isalnum</span>()]</code></pre>
+            </div>
+
+            <h2>Technique 6a: Stemming</h2>
+            <div class="card card-accent-purple">
+                <p><strong>Stemming</strong> reduces words to their root/stem by chopping off endings. The stem may NOT
+                    be a valid dictionary word. Fast but crude.</p>
+                <pre><code><span class="kw">from</span> nltk.stem <span class="kw">import</span> <span class="cls">PorterStemmer</span>, <span class="cls">SnowballStemmer</span>, <span class="cls">LancasterStemmer</span>
+
+words = [<span class="str">"running"</span>, <span class="str">"flies"</span>, <span class="str">"better"</span>, <span class="str">"mice"</span>, <span class="str">"cakes"</span>]
+
+porter = <span class="cls">PorterStemmer</span>()
+stems = [porter.<span class="fn">stem</span>(w) <span class="kw">for</span> w <span class="kw">in</span> words]
+<span class="cm"># ['run', 'fli', 'better', 'mice', 'cake']</span>
+
+snowball = <span class="cls">SnowballStemmer</span>(<span class="str">"english"</span>)
+stems = [snowball.<span class="fn">stem</span>(w) <span class="kw">for</span> w <span class="kw">in</span> words]
+
+lancaster = <span class="cls">LancasterStemmer</span>()
+stems = [lancaster.<span class="fn">stem</span>(w) <span class="kw">for</span> w <span class="kw">in</span> words]
+<span class="cm"># More aggressive: ['run', 'fli', 'bet', 'mic', 'cak']</span>
+
+<span class="cm"># Regex Stemmer</span>
+<span class="kw">from</span> nltk.stem <span class="kw">import</span> <span class="cls">RegexpStemmer</span>
+stemmer = <span class="cls">RegexpStemmer</span>(<span class="str">'ing$|s$|e$|able$'</span>, min=<span class="num">4</span>)</code></pre>
+            </div>
+
+            <h2>Porter Stemmer — The Algorithm (Exam Favourite!)</h2>
+            <div class="card">
+                <p>Developed by Martin F. Porter (1980). Words = Stem + Suffixes. Uses measure <strong>m</strong> =
+                    number of vowel-consonant (VC) sequences.</p>
+                <div class="formula">Word structure: [C](VC)ᵐ[V] — where m is the measure</div>
+                <table>
+                    <tr>
+                        <th>Step</th>
+                        <th>What it does</th>
+                        <th>Example</th>
+                    </tr>
+                    <tr>
+                        <td>1a</td>
+                        <td>Handles plural markers (sses, ies, s)</td>
+                        <td>caresses → caress, ponies → poni, cats → cat</td>
+                    </tr>
+                    <tr>
+                        <td>1b</td>
+                        <td>Handles tense markers (-ed, -ing)</td>
+                        <td>running → run, filing → file</td>
+                    </tr>
+                    <tr>
+                        <td>1c</td>
+                        <td>y → i if stem has vowel</td>
+                        <td>happy → happi (not sky → sky)</td>
+                    </tr>
+                    <tr>
+                        <td>2</td>
+                        <td>Replace regular suffixes (m>0)</td>
+                        <td>relational → relate, conditional → condition</td>
+                    </tr>
+                    <tr>
+                        <td>3</td>
+                        <td>Replace common suffixes (m>0)</td>
+                        <td>electrical → electric, hopeful → hope</td>
+                    </tr>
+                    <tr>
+                        <td>4</td>
+                        <td>Remove suffixes (m>1)</td>
+                        <td>revival → reviv, allowance → allow</td>
+                    </tr>
+                    <tr>
+                        <td>5a,5b</td>
+                        <td>Clean up final -e or double consonants</td>
+                        <td>probate → probat, control → control</td>
+                    </tr>
+                </table>
+                <div class="alert">Limitations: Over-stemming (universe/university → univers), Under-stemming (keeping
+                    too much). Porter stemmer ignores context.</div>
+            </div>
+
+            <h2>Technique 6b: Lemmatization</h2>
+            <div class="card card-accent-green">
+                <p><strong>Lemmatization</strong> reduces words to their dictionary form (lemma) using vocabulary and
+                    morphological analysis. Slower but accurate.</p>
+                <pre><code><span class="kw">from</span> nltk.stem <span class="kw">import</span> <span class="cls">WordNetLemmatizer</span>
+lemmatizer = <span class="cls">WordNetLemmatizer</span>()
+words = [<span class="str">"running"</span>, <span class="str">"flies"</span>, <span class="str">"better"</span>, <span class="str">"mice"</span>]
+lemmas = [lemmatizer.<span class="fn">lemmatize</span>(word, pos=<span class="str">"v"</span>) <span class="kw">for</span> word <span class="kw">in</span> words]
+<span class="cm"># ['run', 'fly', 'better', 'mouse']</span></code></pre>
+                <table>
+                    <tr>
+                        <th>Feature</th>
+                        <th>Stemming</th>
+                        <th>Lemmatization</th>
+                    </tr>
+                    <tr>
+                        <td>Output</td>
+                        <td>Stem (may not be real word)</td>
+                        <td>Lemma (valid dictionary word)</td>
+                    </tr>
+                    <tr>
+                        <td>Speed</td>
+                        <td>Faster</td>
+                        <td>Slower</td>
+                    </tr>
+                    <tr>
+                        <td>Accuracy</td>
+                        <td>Lower</td>
+                        <td>Higher</td>
+                    </tr>
+                    <tr>
+                        <td>Uses vocabulary?</td>
+                        <td>No</td>
+                        <td>Yes</td>
+                    </tr>
+                    <tr>
+                        <td>Example: "better"</td>
+                        <td>better (unchanged)</td>
+                        <td>good (correct!)</td>
+                    </tr>
+                </table>
+            </div>
+
+            <h2>Sentence Segmentation</h2>
+            <div class="card">
+                <p>Divides continuous text into individual sentences. Challenges: periods in abbreviations (Mr., p.m.),
+                    nested quotes, languages without explicit boundaries (Chinese, Japanese).</p>
+                <pre><code><span class="kw">import</span> re
+text = <span class="str">"Hello!! How are you? Let's meet at 5 p.m. today in Mr. Idli"</span>
+
+<span class="cm"># Basic (BAD — splits on abbreviations too)</span>
+re.<span class="fn">split</span>(r<span class="str">'[.!?]+'</span>, text)  <span class="cm"># gives 7 wrong sentences</span>
+
+<span class="cm"># Better — only split when punctuation is followed by space</span>
+re.<span class="fn">split</span>(r<span class="str">'[.!?]\s+'</span>, text)
+
+<span class="cm"># Keep the punctuation in output (lookbehind assertion)</span>
+re.<span class="fn">split</span>(r<span class="str">'(?<=[.!?])\s+'</span>, text)
+
+<span class="cm"># ML-based (best) using spaCy</span>
+<span class="kw">import</span> spacy
+nlp = spacy.<span class="fn">load</span>(<span class="str">"en_core_web_sm"</span>)
+doc = <span class="fn">nlp</span>(text)
+sentences = [sent.text <span class="kw">for</span> sent <span class="kw">in</span> doc.sents]</code></pre>
+                <div class="key-point">Lookbehind assertion (?&lt;=pattern) checks what is on the LEFT without consuming
+                    characters. Lookahead (?=pattern) checks what is on the RIGHT.</div>
+            </div>
+        </div>
+
+        <!-- ==================== TAB 4: N-GRAM ==================== -->
+        <div class="tab-panel" id="tab-ngram">
+            <h1>N-gram Language Models</h1>
+            <p class="subtitle">Frequency, MLE, Smoothing — the core of probabilistic NLP</p>
+
+            <div class="card card-accent-blue">
+                <h3>What is a Language Model?</h3>
+                <p>A model that assigns probabilities to sequences of characters/words. N-gram is the simplest such
+                    model.</p>
+                <p>An <strong>N-gram</strong> is a contiguous sequence of N items (characters or words).</p>
+                <table>
+                    <tr>
+                        <th>N</th>
+                        <th>Name</th>
+                        <th>Example (word: "wishing")</th>
+                    </tr>
+                    <tr>
+                        <td>1</td>
+                        <td>Unigram</td>
+                        <td>wishing</td>
+                    </tr>
+                    <tr>
+                        <td>2</td>
+                        <td>Bigram</td>
+                        <td>wi, is, sh, hi, in, ng (character); "wishing you", "you a" (word)</td>
+                    </tr>
+                    <tr>
+                        <td>3</td>
+                        <td>Trigram</td>
+                        <td>wis, ish, shi, hin, ing (char); "wishing you a" (word)</td>
+                    </tr>
+                </table>
+            </div>
+
+            <h2>Character N-gram Code</h2>
+            <pre><code>text = <span class="str">"Malayalam is a palindrome word"</span>
+text = text.<span class="fn">lower</span>()
+
+<span class="cm"># Character bigrams</span>
+ngrams = [text[i:i+<span class="num">2</span>] <span class="kw">for</span> i <span class="kw">in</span> <span class="fn">range</span>(<span class="fn">len</span>(text)-<span class="num">1</span>)]
+<span class="fn">print</span>(ngrams)
+
+<span class="cm"># Count frequencies</span>
+<span class="kw">from</span> collections <span class="kw">import</span> <span class="cls">Counter</span>
+ngramFreq = <span class="cls">Counter</span>(ngrams)
+<span class="kw">for</span> ngram, freq <span class="kw">in</span> ngramFreq.<span class="fn">items</span>():
+    <span class="fn">print</span>(f<span class="str">"'{ngram}': {freq}"</span>)</code></pre>
+
+            <h2>Word N-gram Code</h2>
+            <pre><code>text = <span class="str">"wishing you a good day"</span>
+words = text.<span class="fn">split</span>()
+
+<span class="cm"># Word bigrams</span>
+ngrams = [(words[i], words[i+<span class="num">1</span>]) <span class="kw">for</span> i <span class="kw">in</span> <span class="fn">range</span>(<span class="fn">len</span>(words) - <span class="num">1</span>)]
+<span class="cm"># [('wishing', 'you'), ('you', 'a'), ('a', 'good'), ('good', 'day')]</span>
+
+<span class="kw">from</span> collections <span class="kw">import</span> <span class="cls">Counter</span>
+ngramFreq = <span class="cls">Counter</span>(ngrams)
+<span class="fn">print</span>(ngramFreq)</code></pre>
+
+            <h2>Relative Frequency</h2>
+            <div class="card card-accent-purple">
+                <div class="formula">Relative Frequency = Count of unit / Total units in corpus</div>
+                <pre><code><span class="kw">from</span> collections <span class="kw">import</span> <span class="cls">Counter</span>
+text = <span class="str">"The quick brown fox jumps over the lazy dog"</span>
+words = text.<span class="fn">lower</span>().<span class="fn">split</span>()
+wordCounts = <span class="cls">Counter</span>(words)
+totalWords = <span class="fn">sum</span>(wordCounts.<span class="fn">values</span>())
+
+relativeFreq = {}
+<span class="kw">for</span> word, count <span class="kw">in</span> wordCounts.<span class="fn">items</span>():
+    relativeFreq[word] = count / totalWords
+    <span class="fn">print</span>(f<span class="str">'{word} : {round(relativeFreq[word],3)}'</span>)</code></pre>
+                <div class="alert">Limitations of frequency: Raw frequency doesn't allow fair comparisons across
+                    different corpus sizes. Zipf's Law only holds for large corpora.</div>
+            </div>
+
+            <h2>Maximum Likelihood Estimation (MLE)</h2>
+            <div class="card card-accent-blue">
+                <p>Estimates probability distribution of word sequences that <em>maximizes likelihood</em> of seeing the
+                    training data.</p>
+                <div class="formula">P(wₙ | wₙ₋₁) = Count(wₙ₋₁, wₙ) / Count(wₙ₋₁)</div>
+                <div class="card" style="margin-top:0.8rem">
+                    <h3>Example Calculation</h3>
+                    <p>Count("machine learning") = 50, Count("machine") = 150</p>
+                    <p>Count("parrot learning") = 100, Count("parrot") = 110</p>
+                    <div class="formula">P(learning | machine) = 50/150 ≈ 0.33<br>P(learning | parrot) = 100/110 ≈ 0.90
+                    </div>
+                </div>
+                <div class="alert">MLE's BIG PROBLEM: Assigns ZERO probability to unseen N-grams (words/phrases not in
+                    training data). Also overfits to training corpus and is sensitive to outliers.</div>
+            </div>
+
+            <h2>Smoothing Techniques</h2>
+            <p>Smoothing redistributes probability mass from seen events to unseen ones, so everything gets non-zero
+                probability.</p>
+
+            <div class="accordion">
+                <div class="acc-header" onclick="toggleAcc(this)">
+                    Add-1 (Laplace) Smoothing <span class="arrow">▼</span>
+                </div>
+                <div class="acc-body">
+                    <p>Add 1 to all N-gram counts. Simple baseline.</p>
+                    <div class="formula">P_add-one(wₙ|wₙ₋₁) = (Count(wₙ₋₁, wₙ) + 1) / (Count(wₙ₋₁) + V)</div>
+                    <p>V = vocabulary size. <strong>Problem:</strong> Distorts distribution when vocabulary is large —
+                        assigns too much probability to rare/unseen events.</p>
+                </div>
+            </div>
+
+            <div class="accordion">
+                <div class="acc-header" onclick="toggleAcc(this)">
+                    Add-k Smoothing <span class="arrow">▼</span>
+                </div>
+                <div class="acc-body">
+                    <div class="formula">P_add-k(wₙ|wₙ₋₁) = (Count(wₙ₋₁, wₙ) + k) / (Count(wₙ₋₁) + k×V)</div>
+                    <p>k is typically small (0.01, 0.1). Better than Add-1 as it allows controlled adjustment. Preferred
+                        in real scenarios.</p>
+                </div>
+            </div>
+
+            <div class="accordion">
+                <div class="acc-header" onclick="toggleAcc(this)">
+                    Good-Turing Smoothing <span class="arrow">▼</span>
+                </div>
+                <div class="acc-body">
+                    <p>Key idea: Estimate probability of unseen events from <em>behavior of rare events</em>.</p>
+                    <div class="formula">Adjusted count C* = (C + 1) × N_{C+1} / N_C</div>
+                    <p>N_C = number of events occurring exactly C times (frequency-of-frequency / count-of-count).</p>
+                    <div class="formula">P(unseen word) = N₁ / N</div>
+                    <p>N₁ = words appearing exactly once, N = total corpus size.</p>
+                    <div class="card" style="margin-top:0.8rem">
+                        <h3>Example</h3>
+                        <p>Words: ox:5, box:4, fox:2, cat:1, dog:1</p>
+                        <p>N₁=2 (cat, dog), N₂=1 (fox), N₅=1 (ox)</p>
+                        <p>C* for words with frequency 1 = (1+1)×N₂/N₁ = 2×1/2 = 1</p>
+                        <p>If corpus N=1000, N₁=500: P(unseen) = 500/1000 = 0.5 (50% probability mass reserved for
+                            unseen!)</p>
+                    </div>
+                    <div class="alert">Good-Turing fails when N₁ is inaccurate/noisy, or when there isn't enough data to
+                        get reliable NC statistics.</div>
+                </div>
+            </div>
+
+            <div class="card card-accent-green" style="margin-top:1rem">
+                <h3>Comparison Table</h3>
+                <table>
+                    <tr>
+                        <th>Method</th>
+                        <th>Key Idea</th>
+                        <th>Problem</th>
+                    </tr>
+                    <tr>
+                        <td>MLE</td>
+                        <td>Relative frequency</td>
+                        <td>Zero probability for unseen, overfits</td>
+                    </tr>
+                    <tr>
+                        <td>Add-1 (Laplace)</td>
+                        <td>Add 1 to all counts</td>
+                        <td>Distorts large-vocabulary distributions</td>
+                    </tr>
+                    <tr>
+                        <td>Add-k</td>
+                        <td>Add small k to all counts</td>
+                        <td>Optimal k is corpus-dependent</td>
+                    </tr>
+                    <tr>
+                        <td>Good-Turing</td>
+                        <td>Use rare events to estimate unseen</td>
+                        <td>Needs reliable count-of-count statistics</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
+        <!-- ==================== TAB 5: MORPHOLOGY ==================== -->
+        <div class="tab-panel" id="tab-morphology">
+            <h1>Morphological Analysis</h1>
+            <p class="subtitle">Words, morphemes, word formation — the complete guide</p>
+
+            <div class="card card-accent-blue">
+                <h3>What is Morphological Analysis?</h3>
+                <p>The study of words, how they are formed, and their internal relationships. A
+                    <strong>morpheme</strong> is the smallest meaningful unit of a word (grammatical function or
+                    meaning).</p>
+                <ul class="bullets">
+                    <li>It is a word or part of a word that has meaning</li>
+                    <li>Cannot be divided further without creating meaningless remainders</li>
+                    <li>Recurs with relatively stable meaning across different word environments</li>
+                </ul>
+                <div class="key-point">A morphological analyser takes a word as input and outputs: (1) minimum
+                    meaning-bearing units (morphemes) + (2) their grammatical relations.</div>
+            </div>
+
+            <h2>Types of Morphology</h2>
+            <div class="grid-2">
+                <div class="card card-accent-purple">
+                    <h3>Inflectional Morphology</h3>
+                    <p>Derives new words based on tense, mood, person, number, gender, case — WITHOUT changing the
+                        word's core meaning or class.</p>
+                    <ul class="bullets">
+                        <li>dogs = dog + <strong>-s</strong> (plural marker)</li>
+                        <li>doing = do + <strong>-ing</strong> (tense marker)</li>
+                        <li>marked = mark + <strong>-ed</strong> (past tense)</li>
+                        <li>taller = tall + <strong>-er</strong> (comparative)</li>
+                    </ul>
+                    <p>Inflectional morphemes: <code>-s, -'s, -es, -ed, -en, -ing, -er, -est</code></p>
+                </div>
+                <div class="card card-accent-green">
+                    <h3>Derivational Morphology</h3>
+                    <p>Creates NEW words from existing ones by adding derivational affixes. <strong>MAY change the word
+                            class and/or meaning.</strong></p>
+                    <ul class="bullets">
+                        <li>readable = read + <strong>-able</strong> (verb → adjective)</li>
+                        <li>exactly = exact + <strong>-ly</strong> (adj → adverb)</li>
+                        <li>activity = active + <strong>-ity</strong> (adj → noun)</li>
+                        <li>unhappy = <strong>un-</strong> + happy (negation)</li>
+                    </ul>
+                    <p>Derivational morphemes: <code>-ic, -ly, -ate, -ity, -ship, un-, re-</code></p>
+                </div>
+            </div>
+
+            <h2>Root, Base, Stem & Lemma — Key Distinctions!</h2>
+            <table>
+                <tr>
+                    <th>Term</th>
+                    <th>Definition</th>
+                    <th>Example</th>
+                </tr>
+                <tr>
+                    <td><strong>Root</strong></td>
+                    <td>Most basic form carrying the core meaning. Cannot be broken further. May not stand alone.</td>
+                    <td>struct in construct/destruction</td>
+                </tr>
+                <tr>
+                    <td><strong>Base</strong></td>
+                    <td>Form to which affixes can be added. May be a root OR a derived form.</td>
+                    <td>react (derived from act) is a base for reaction, reactive</td>
+                </tr>
+                <tr>
+                    <td><strong>Stem</strong></td>
+                    <td>Output of stemming — crude heuristic removal of suffixes. Not always a real word.</td>
+                    <td>runn (from running, runner)</td>
+                </tr>
+                <tr>
+                    <td><strong>Lemma</strong></td>
+                    <td>Output of lemmatization — proper dictionary/base form after morphological analysis.</td>
+                    <td>am/is/are → be; easily → easy</td>
+                </tr>
+            </table>
+            <div class="alert">Root ≠ Base ≠ Stem ≠ Lemma — this is a common exam distinction! Know each one clearly.
+            </div>
+
+            <h2>Types of Morphemes</h2>
+            <div class="grid-2">
+                <div class="card">
+                    <h3>By Independence</h3>
+                    <ul class="bullets">
+                        <li><strong>Free morpheme</strong>: Can stand alone as a word. car, dog, do</li>
+                        <li><strong>Bound morpheme</strong>: Cannot stand alone, must attach. -s, un-, -ing</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <h3>By Function</h3>
+                    <ul class="bullets">
+                        <li><strong>Inflectional</strong>: Grammatical variation without category change</li>
+                        <li><strong>Derivational</strong>: Creates new word, may change category</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <h3>By Structure</h3>
+                    <ul class="bullets">
+                        <li><strong>Root</strong>: Core meaning-bearing unit</li>
+                        <li><strong>Affix</strong>: Attached to root (prefix, suffix, infix)</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <h3>By Role</h3>
+                    <ul class="bullets">
+                        <li><strong>Lexical</strong>: Meaning-bearing (objects, actions). car, happy, run</li>
+                        <li><strong>Functional</strong>: Grammatical relations. -s, the, in, -ing</li>
+                    </ul>
+                </div>
+            </div>
+
+            <h2>Word Formation Processes (All 10!)</h2>
+            <div class="accordion">
+                <div class="acc-header" onclick="toggleAcc(this)">1. Compounding, 2. Blending, 3. Clipping <span
+                        class="arrow">▼</span></div>
+                <div class="acc-body">
+                    <p><strong>Compounding</strong>: Two+ words → new word. notebook (note+book), basketball, homemade,
+                        रेलगाड़ी</p>
+                    <p><strong>Blending</strong>: Parts of two words merged. Bollywood (Bombay+Hollywood), smog
+                        (smoke+fog), brunch (breakfast+lunch), motel (motor+hotel)</p>
+                    <p><strong>Clipping</strong>: Shortening without meaning change.</p>
+                    <ul class="bullets">
+                        <li>Back-clipping (front kept): ad (advertisement), exam (examination), gas (gasoline)</li>
+                        <li>Fore-clipping (end kept): phone (telephone), varsity (university)</li>
+                        <li>Middle-clipping: flu (influenza)</li>
+                        <li>Complex-clipping: ma'm (madam), fax (facsimile)</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="accordion">
+                <div class="acc-header" onclick="toggleAcc(this)">4. Acronyms, 5. Back-formation, 6. Reduplication <span
+                        class="arrow">▼</span></div>
+                <div class="acc-body">
+                    <p><strong>Acronyms</strong>: Initial letters pronounced as a word. JEE, NASA, CAPTCHA.
+                        <em>Initialism</em>: each letter pronounced (PMO, USA).</p>
+                    <p><strong>Back-formation</strong>: New word by removing perceived affix. edit (from editor),
+                        babysit (from babysitter).</p>
+                    <p><strong>Reduplication</strong>: Root/stem repeated. Three types in Indian languages:</p>
+                    <ul class="bullets">
+                        <li>Exact repetition: बार-बार (baːr-baːr), চলতে-চলতে</li>
+                        <li>Rhyme (second is meaningless rhyme): চায়-বায় (tea-etc)</li>
+                        <li>Partial prefix repetition: দা-দৰমহা</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="accordion">
+                <div class="acc-header" onclick="toggleAcc(this)">7. Borrowing, 8. Coinage, 9. Eponymy, 10. Affixation
+                    <span class="arrow">▼</span></div>
+                <div class="acc-body">
+                    <p><strong>Borrowing</strong>: Adopting words from other languages. karaoke (Japanese), pizza
+                        (Italian), किताब/दफ्तर/साहब (Persian).</p>
+                    <p><strong>Coinage</strong>: Creating entirely new words. Google (brand → verb).</p>
+                    <p><strong>Eponymy</strong>: Brand/person name becomes common word. Sandwich (Earl of Sandwich),
+                        Teddy bear (President Roosevelt).</p>
+                    <p><strong>Affixation</strong>: Adding units to root/base.</p>
+                    <ul class="bullets">
+                        <li><strong>Suffix</strong>: End. do+ing=doing, do+able=doable</li>
+                        <li><strong>Prefix</strong>: Beginning. un+happy=unhappy, re+write=rewrite</li>
+                        <li><strong>Infix</strong>: Middle (rare in Indo-Aryan). spoon+s+ful=spoonsful</li>
+                        <li><strong>Circumfix</strong>: Both beginning AND end simultaneously. en+light+en=enlighten
+                        </li>
+                        <li><strong>Duplifix</strong>: Partial/full root repetition (e.g., Pingelapese: mahuta →
+                            mahutamahuta)</li>
+                        <li><strong>Interfix</strong>: Connector between morphemes. speed+o+meter=speedometer</li>
+                    </ul>
+                </div>
+            </div>
+
+            <h2>Morphological Ambiguity</h2>
+            <div class="card card-accent-red">
+                <p>A word analyzed in more than one valid way.</p>
+                <table>
+                    <tr>
+                        <th>Type</th>
+                        <th>Example</th>
+                        <th>Explanation</th>
+                    </tr>
+                    <tr>
+                        <td>Affix attachment</td>
+                        <td>unlockable</td>
+                        <td>un+lockable (not lockable) OR unlock+able (can be unlocked)</td>
+                    </tr>
+                    <tr>
+                        <td>Category ambiguity</td>
+                        <td>-er suffix</td>
+                        <td>taller (comparative adj) OR doer (agentive noun)</td>
+                    </tr>
+                    <tr>
+                        <td>False segmentation</td>
+                        <td>recover</td>
+                        <td>Looks like re+cover but means "get better" (single lexical unit)</td>
+                    </tr>
+                    <tr>
+                        <td>Scope ambiguity</td>
+                        <td>unhappily</td>
+                        <td>un+happily OR unhappy+ly — where does negation apply?</td>
+                    </tr>
+                </table>
+            </div>
+
+            <h2>Why Morpheme Analysis is Hard</h2>
+            <div class="grid-2">
+                <div class="card">
+                    <h3>Homonymous Morphemes</h3>
+                    <p>Same form, different function. -er in <em>taller</em> (comparative) vs <em>teacher</em>
+                        (agentive).</p>
+                </div>
+                <div class="card">
+                    <h3>Allomorphs</h3>
+                    <p>Same grammatical function, different surface forms. Plural -s in: cats /s/, dogs /z/, judges
+                        /ɪz/.</p>
+                </div>
+                <div class="card">
+                    <h3>Zero Morph (ϕ)</h3>
+                    <p>Grammatical meaning but no visible form. sheep+ϕ (plural), cut+ϕ (past tense).</p>
+                </div>
+                <div class="card">
+                    <h3>Opaque Structure</h3>
+                    <p>Cannot split despite looking divisible. understand ≠ under+stand, department ≠ depart+ment,
+                        handsome ≠ hand+some.</p>
+                </div>
+            </div>
+
+            <h2>Syllables</h2>
+            <div class="card card-accent-purple">
+                <p>A syllable is the smallest unit of rhythm and pronunciation, built around one vowel sound.</p>
+                <p>Structure: <strong>Onset</strong> (initial consonants) + <strong>Nucleus</strong> (vowel) +
+                    <strong>Coda</strong> (final consonants)</p>
+                <p>Example: <em>strength</em> → onset:/str/ nucleus:/e/ coda:/ngth/</p>
+                <ul class="bullets">
+                    <li><strong>Phoneme</strong>: Smallest sound unit that distinguishes meaning (bat vs pat)</li>
+                    <li><strong>Diphthong</strong>: Two vowel sounds in one syllable (rain /reɪn/, out /aʊt/, coin
+                        /kɔɪn/)</li>
+                    <li><strong>Monosyllable</strong>: One syllable. <strong>Polysyllable</strong>: Multiple syllables.
+                    </li>
+                    <li><strong>Open syllable</strong>: Ends with vowel (to, hi, go). <strong>Closed syllable</strong>:
+                        Ends with consonant (art, fast)</li>
+                </ul>
+                <div class="alert">Late, time, fine are diphthongs even with one vowel letter because the tongue GLIDES
+                    (sound changes). Seat, food are NOT diphthongs — the sound stays steady.</div>
+            </div>
+        </div>
+
+        <!-- ==================== TAB 6: REGEX ==================== -->
+        <div class="tab-panel" id="tab-regex">
+            <h1>Regular Expressions</h1>
+            <p class="subtitle">Formal notation, Python re module, JavaScript regex — complete guide with examples</p>
+
+            <div class="card card-accent-blue">
+                <h3>What is a Regular Expression?</h3>
+                <p>A formal, algebraic notation to define a search pattern for strings. Invented by Stephen C. Kleene
+                    (1951). Based on regular language theory.</p>
+                <div class="key-point">Every RE has an equivalent Finite State Automaton (FSA). Thompson's construction:
+                    RE → ε-NFA → DFA (subset construction) → Minimized DFA.</div>
+            </div>
+
+            <h2>Core Operators</h2>
+            <table>
+                <tr>
+                    <th>Operator</th>
+                    <th>Symbol</th>
+                    <th>Meaning</th>
+                    <th>Precedence</th>
+                    <th>Example</th>
+                </tr>
+                <tr>
+                    <td>Union</td>
+                    <td>|</td>
+                    <td>Choice between patterns</td>
+                    <td>Lowest</td>
+                    <td>ab|xy → ab or xy</td>
+                </tr>
+                <tr>
+                    <td>Concatenation</td>
+                    <td>.</td>
+                    <td>Sequence of symbols</td>
+                    <td>Middle</td>
+                    <td>abc → abc</td>
+                </tr>
+                <tr>
+                    <td>Kleene Star</td>
+                    <td>*</td>
+                    <td>Zero or more repetitions</td>
+                    <td>Highest</td>
+                    <td>ab* → a, ab, abb...</td>
+                </tr>
+            </table>
+
+            <h2>Extended/Derived Operators</h2>
+            <table>
+                <tr>
+                    <th>Operator</th>
+                    <th>Symbol</th>
+                    <th>Meaning</th>
+                    <th>Rewritten as</th>
+                    <th>Example</th>
+                </tr>
+                <tr>
+                    <td>Positive Closure</td>
+                    <td>+</td>
+                    <td>One or more</td>
+                    <td>aa*</td>
+                    <td>ab+ → ab, abb, abbb</td>
+                </tr>
+                <tr>
+                    <td>Optional</td>
+                    <td>?</td>
+                    <td>Zero or one</td>
+                    <td>a|ε</td>
+                    <td>ab? → a, ab</td>
+                </tr>
+                <tr>
+                    <td>Exact count</td>
+                    <td>{n}</td>
+                    <td>Exactly n times</td>
+                    <td>—</td>
+                    <td>a{3} → aaa</td>
+                </tr>
+                <tr>
+                    <td>Range</td>
+                    <td>{m,n}</td>
+                    <td>m to n times</td>
+                    <td>—</td>
+                    <td>a{2,4} → aa, aaa, aaaa</td>
+                </tr>
+            </table>
+
+            <h2>Metacharacters</h2>
+            <div class="grid-2">
+                <div class="card">
+                    <h3>Quantifiers</h3>
+                    <pre><code>re.<span class="fn">findall</span>(r<span class="str">"c.t"</span>, <span class="str">"cat cut cot"</span>)  <span class="cm"># . = any char</span>
+re.<span class="fn">findall</span>(r<span class="str">"ab+"</span>, <span class="str">"a ab abb"</span>)     <span class="cm"># 1 or more</span>
+re.<span class="fn">findall</span>(r<span class="str">"ab*"</span>, <span class="str">"a ab abb"</span>)     <span class="cm"># 0 or more</span>
+re.<span class="fn">findall</span>(r<span class="str">"colou?r"</span>, <span class="str">"color colour"</span>)<span class="cm"># optional u</span>
+re.<span class="fn">findall</span>(r<span class="str">"\d{4}"</span>, <span class="str">"2000,2026"</span>)    <span class="cm"># exactly 4 digits</span>
+re.<span class="fn">findall</span>(r<span class="str">"\d{4,}"</span>, <span class="str">"2000,20001"</span>) <span class="cm"># 4 or more</span>
+re.<span class="fn">findall</span>(r<span class="str">"\d{2,4}"</span>, <span class="str">"20,200,2026"</span>)<span class="cm"># 2 to 4</span></code></pre>
+                </div>
+                <div class="card">
+                    <h3>Anchors & Character Classes</h3>
+                    <pre><code>re.<span class="fn">search</span>(<span class="str">"^Hello"</span>, text)  <span class="cm"># ^ = start</span>
+re.<span class="fn">search</span>(<span class="str">"world$"</span>, text)  <span class="cm"># $ = end</span>
+re.<span class="fn">findall</span>(<span class="str">"[aeiou]"</span>, text) <span class="cm"># char class</span>
+re.<span class="fn">findall</span>(<span class="str">"[0-9]"</span>, text)   <span class="cm"># digit range</span>
+re.<span class="fn">findall</span>(<span class="str">"[^aeiou]"</span>, text) <span class="cm"># NOT vowels</span>
+re.<span class="fn">findall</span>(<span class="str">"cat|dog"</span>, text)  <span class="cm"># pipe = OR</span>
+re.<span class="fn">findall</span>(<span class="str">"(ab)+"</span>, text)   <span class="cm"># grouping</span></code></pre>
+                </div>
+            </div>
+
+            <h2>Quantifier Types</h2>
+            <div class="grid-2">
+                <div class="card">
+                    <h3>Bounded vs Unbounded</h3>
+                    <ul class="bullets">
+                        <li><strong>Bounded</strong>: {n}, {m,n} — max repetition known in advance</li>
+                        <li><strong>Unbounded</strong>: *, +, {3,} — potentially infinite</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <h3>Greedy vs Lazy vs Possessive</h3>
+                    <ul class="bullets">
+                        <li><strong>Greedy</strong> (default): +, *, ?, {n,m} — match as MUCH as possible, allow
+                            backtracking</li>
+                        <li><strong>Lazy</strong>: *?, +?, ??, {n,m}? — match as LITTLE as possible, expand if needed
+                        </li>
+                        <li><strong>Possessive</strong>: *+, ++, ?+, {n,m}+ — match as much as possible, NEVER backtrack
+                        </li>
+                    </ul>
+                    <div class="key-point">Possessive quantifiers prevent ReDoS (Regular Expression Denial of Service)
+                        attacks.</div>
+                </div>
+            </div>
+
+            <h2>Python re Module — All Methods</h2>
+            <pre><code><span class="kw">import</span> re
+text = <span class="str">"Zebra has @bug in #bat. Found while playing with python and tom@cat."</span>
+
+re.<span class="fn">match</span>(<span class="str">"cat"</span>, text)         <span class="cm"># Match only at BEGINNING of string</span>
+re.<span class="fn">search</span>(<span class="str">"cat"</span>, text).<span class="fn">group</span>() <span class="cm"># Search ANYWHERE in string → first match</span>
+re.<span class="fn">findall</span>(r<span class="str">"\d+"</span>, text)       <span class="cm"># Returns ALL matches as a list</span>
+re.<span class="fn">sub</span>(r<span class="str">"\d"</span>, <span class="str">"X"</span>, text)        <span class="cm"># Replace all digits with X</span>
+re.<span class="fn">split</span>(r<span class="str">"[,;| ]"</span>, text)       <span class="cm"># Split on comma, semicolon, pipe, space</span></code></pre>
+
+            <h2>Lookahead & Lookbehind</h2>
+            <div class="card card-accent-purple">
+                <p>Zero-width assertions — check pattern without consuming characters.</p>
+                <table>
+                    <tr>
+                        <th>Assertion</th>
+                        <th>Syntax</th>
+                        <th>Meaning</th>
+                    </tr>
+                    <tr>
+                        <td>Positive Lookahead</td>
+                        <td>(?=pattern)</td>
+                        <td>Match if followed by pattern</td>
+                    </tr>
+                    <tr>
+                        <td>Negative Lookahead</td>
+                        <td>(?!pattern)</td>
+                        <td>Match if NOT followed by pattern</td>
+                    </tr>
+                    <tr>
+                        <td>Positive Lookbehind</td>
+                        <td>(?&lt;=pattern)</td>
+                        <td>Match if preceded by pattern</td>
+                    </tr>
+                    <tr>
+                        <td>Negative Lookbehind</td>
+                        <td>(?&lt;!pattern)</td>
+                        <td>Match if NOT preceded by pattern</td>
+                    </tr>
+                </table>
+                <pre><code><span class="cm"># Mask first 7 digits of phone number</span>
+text = <span class="str">"Mobile number: 1234567890"</span>
+re.<span class="fn">sub</span>(r<span class="str">"\d(?=\d{3})"</span>, <span class="str">"*"</span>, text)
+
+<span class="cm"># Extract amount only if preceded by Rs.</span>
+text = <span class="str">"Paid Rs.1000 today and 200 yesterday"</span>
+re.<span class="fn">findall</span>(r<span class="str">"(?<=Rs\.)\d+"</span>, text)  <span class="cm"># → ['1000']</span></code></pre>
+            </div>
+
+            <h2>Algebraic Properties of RE</h2>
+            <div class="card">
+                <table>
+                    <tr>
+                        <th>Property</th>
+                        <th>Law</th>
+                    </tr>
+                    <tr>
+                        <td>Commutative</td>
+                        <td>R | S = S | R</td>
+                    </tr>
+                    <tr>
+                        <td>Associative</td>
+                        <td>(R|S)|T = R|(S|T) ; (RS)T = R(ST)</td>
+                    </tr>
+                    <tr>
+                        <td>Distributive</td>
+                        <td>R(S|T) = RS|RT ; (R|S)T = RT|ST</td>
+                    </tr>
+                    <tr>
+                        <td>Identity</td>
+                        <td>R|ϕ=R ; Rε=εR=R</td>
+                    </tr>
+                    <tr>
+                        <td>Null</td>
+                        <td>Rϕ=ϕR=ϕ</td>
+                    </tr>
+                    <tr>
+                        <td>Idempotent</td>
+                        <td>R|R=R</td>
+                    </tr>
+                    <tr>
+                        <td>Kleene star</td>
+                        <td>(R*)* = R* ; ϕ* = ε ; ε* = ε</td>
+                    </tr>
+                </table>
+            </div>
+
+            <h2>Quick Reference: Common RE Examples</h2>
+            <div class="card card-accent-green">
+                <div class="quick-ref-row">
+                    <div class="qr-key">[a-zA-Z_][a-zA-Z0-9_]*</div>
+                    <div class="qr-val">C identifier</div>
+                </div>
+                <div class="quick-ref-row">
+                    <div class="qr-key">[aeiou]</div>
+                    <div class="qr-val">Any vowel</div>
+                </div>
+                <div class="quick-ref-row">
+                    <div class="qr-key">[A-Z]{2}[0-9]{5}</div>
+                    <div class="qr-val">Two uppercase + 5 digits (PE3059)</div>
+                </div>
+                <div class="quick-ref-row">
+                    <div class="qr-key">(0+1)*01</div>
+                    <div class="qr-val">Binary strings ending in 01</div>
+                </div>
+                <div class="quick-ref-row">
+                    <div class="qr-key">1*(01*01*)*</div>
+                    <div class="qr-val">Binary strings with even number of 0s</div>
+                </div>
+                <div class="quick-ref-row">
+                    <div class="qr-key">b*a*</div>
+                    <div class="qr-val">Strings over {a,b} not containing 'ab'</div>
+                </div>
+                <div class="quick-ref-row">
+                    <div class="qr-key">0*10*10*</div>
+                    <div class="qr-val">Binary strings with exactly two 1s</div>
+                </div>
+                <div class="quick-ref-row">
+                    <div class="qr-key">(0 + 10)*</div>
+                    <div class="qr-val">Binary strings where every 1 is followed by 0</div>
+                </div>
+                <div class="quick-ref-row">
+                    <div class="qr-key">((a+b)(a+b))+</div>
+                    <div class="qr-val">Strings over {a,b} with even length ≥ 2</div>
+                </div>
+                <div class="quick-ref-row">
+                    <div class="qr-key">colou?r</div>
+                    <div class="qr-val">Matches color AND colour</div>
+                </div>
+                <div class="quick-ref-row">
+                    <div class="qr-key">\w+ (Unicode: \p{L}\p{M}+)</div>
+                    <div class="qr-val">Extract words from multilingual text</div>
+                </div>
+                <div class="quick-ref-row">
+                    <div class="qr-key">[\p{Devanagari}]+</div>
+                    <div class="qr-val">Display only Devanagari text</div>
+                </div>
+                <div class="quick-ref-row">
+                    <div class="qr-key">[^a-zA-Z\s]</div>
+                    <div class="qr-val">Clean noisy text (keep only alphabets)</div>
+                </div>
+            </div>
+
+            <h2>JavaScript Regex</h2>
+            <div class="card">
+                <pre><code><span class="kw">let</span> text = <span class="str">"Zebra has @bug in #bat. Found while playing with python and tom@cat."</span>
+
+<span class="cm">// test() — returns true/false</span>
+/<span class="fn">bat</span>/.<span class="fn">test</span>(text);
+
+<span class="cm">// search() — returns index position</span>
+text.<span class="fn">search</span>(/<span class="fn">bat</span>/);
+
+<span class="cm">// match() — returns matching strings</span>
+text.<span class="fn">match</span>(/\p{P}/gu);  <span class="cm">// \p{P}=punctuation, g=global, u=unicode</span>
+
+<span class="cm">// exec() — detailed match info, one at a time</span>
+<span class="kw">let</span> rgx = /<span class="fn">bat</span>/g; rgx.<span class="fn">exec</span>(text);
+
+<span class="cm">// replace()</span>
+text.<span class="fn">replace</span>(/\d(?=\d{3})/g, <span class="str">"*"</span>);  <span class="cm">// mask phone digits</span>
+
+<span class="cm">// split()</span>
+<span class="str">"apple,banana;orange|grape"</span>.<span class="fn">split</span>(/[,;|]/);</code></pre>
+                <p>Property escapes in JS: <code>\p{N}</code>=Number, <code>\p{P}</code>=Punctuation,
+                    <code>\p{Lu}</code>=Uppercase, <code>\P{N}</code>=NOT number.</p>
+            </div>
+
+            <div class="alert">KEY DISTINCTIONS for exam: (ab) vs [ab] — parentheses group, brackets match ONE character
+                from set. .* (greedy) vs .*? (lazy). (abc|ab)+ vs [abc]+ — first matches "abc" or "ab" repeated; second
+                matches any char from {a,b,c} repeatedly.</div>
+        </div>
+
+    </div><!-- /content -->
+
+    <div class="scroll-top" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</div>
+
+    <script>
+        function switchTab(id) {
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById('tab-' + id).classList.add('active');
+            event.target.classList.add('active');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        function toggleAcc(header) {
+            const body = header.nextElementSibling;
+            header.classList.toggle('open');
+            body.classList.toggle('open');
+        }
+    </script>
+</body>
+
+</html>

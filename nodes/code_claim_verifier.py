@@ -1,19 +1,3 @@
-"""
-hallu-check | nodes/code_claim_verifier.py
-Claim-Level Code Verification via Subprocess Execution
-
-Verifies a code-related claim by:
-  1. Asking Gemini to generate 3 test cases for the code snippet
-  2. Running code + each test in an isolated subprocess (subprocess.run,
-     never eval/exec) with a 5-second wall-clock timeout
-  3. Returning a structured verdict dict
-
-Safety:
-  • Dangerous imports (os, sys, subprocess, shutil, signal, socket, ctypes)
-    are stripped from the executed code before running.
-  • Each test runs in a fresh tempdir with Python's isolated mode (-I).
-  • Hard 5-second timeout per test case.
-"""
 from __future__ import annotations
 
 import json
@@ -47,15 +31,6 @@ _IMPORT_LINE_RE = re.compile(
 
 
 def _sanitize_code(code: str) -> str:
-    """
-    Remove lines that import any forbidden module.
-
-    Handles:
-      • ``import os``
-      • ``import os, sys``  (entire line removed if ANY module is forbidden)
-      • ``from os import path``
-      • ``from os.path import join``
-    """
     clean_lines: list[str] = []
     for line in code.splitlines():
         stripped = line.strip()
@@ -116,14 +91,6 @@ Respond with ONLY this JSON array (no markdown fences, no extra text):
 
 
 def _generate_test_cases(claim: str, code_snippet: str) -> List[Dict[str, str]]:
-    """
-    Generate 3 test cases for the code snippet using the local LLM.
-
-    Falls back to Gemini if available. Always returns at least one fallback
-    "crash test" so EGV never silently skips verification.
-
-    Returns a list of dicts with keys: input, expected, description.
-    """
     prompt = _TEST_GEN_PROMPT.format(
         code_snippet=code_snippet[:3000],
         claim=claim[:500],
@@ -151,15 +118,6 @@ def _generate_test_cases(claim: str, code_snippet: str) -> List[Dict[str, str]]:
 
 
 def _robust_parse_test_cases(raw: str) -> List[Dict[str, str]]:
-    """
-    Robustly parse test cases from LLM output.
-
-    Handles Llama 3B's common output patterns:
-      - Wrapped in markdown ```json ... ``` fences
-      - Explanatory text before/after the JSON
-      - Individual JSON objects instead of an array
-      - Extra whitespace and newlines
-    """
     # Strategy 1: Direct parse
     try:
         parsed = json.loads(raw.strip())
@@ -221,7 +179,6 @@ def _robust_parse_test_cases(raw: str) -> List[Dict[str, str]]:
 
 
 def _validate_test_cases(parsed: list) -> List[Dict[str, str]]:
-    """Filter a parsed list to only valid test case dicts."""
     valid = [
         tc for tc in parsed
         if isinstance(tc, dict) and "input" in tc and "expected" in tc
@@ -230,11 +187,6 @@ def _validate_test_cases(parsed: list) -> List[Dict[str, str]]:
 
 
 def _generate_crash_test(func_name: str, code_snippet: str) -> Dict[str, str]:
-    """
-    Generate a trivial fallback test: call the function with a simple input
-    and check it doesn't crash. This ensures EGV always has at least one
-    test case even when the LLM fails to produce parseable output.
-    """
     # Try to infer a sensible trivial input from the function signature
     sig_match = re.search(r"def\s+" + re.escape(func_name) + r"\s*\(([^)]*)", code_snippet)
     if sig_match:
@@ -261,13 +213,6 @@ def _generate_crash_test(func_name: str, code_snippet: str) -> Dict[str, str]:
 
 
 def _call_llm_for_test_cases(prompt: str) -> str:
-    """
-    Call the local LLM (Ollama) for test case generation.
-    Falls back to Gemini if local is unavailable.
-
-    Uses the project's local_llm module — Ollama on localhost,
-    zero cost, no API quotas.
-    """
     # ── Primary: Local LLM via Ollama (free, no quota) ───────────────────
     try:
         from nodes.local_llm import chat_completion, is_available  # type: ignore[import-not-found]
@@ -293,15 +238,7 @@ def _call_llm_for_test_cases(prompt: str) -> str:
     except Exception as e:
         logger.warning("code_claim_verifier | Local LLM failed: %s", str(e)[:120])
 
-    # ── Fallback: Gemini (if available and has quota) ────────────────────
-    try:
-        from nodes.claim_verifier import _gemini_generate  # type: ignore[import-not-found]
-        result = _gemini_generate(prompt)
-        if result:
-            logger.info("code_claim_verifier | Test cases generated via Gemini (fallback).")
-            return result
-    except Exception as e:
-        logger.warning("code_claim_verifier | Gemini fallback also failed: %s", str(e)[:120])
+    # (No Gemini fallback — API reserved for refiner only)
 
     return ""
 
@@ -311,7 +248,6 @@ def _call_llm_for_test_cases(prompt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _extract_function_name(code: str) -> str | None:
-    """Extract the first function name from code."""
     match = re.search(r"def\s+(\w+)\s*\(", code)
     return match.group(1) if match else None
 
@@ -322,16 +258,6 @@ def _run_single_test(
     test_input: str,
     timeout: int = _EXEC_TIMEOUT,
 ) -> Dict[str, Any]:
-    """
-    Run one test case in an isolated subprocess via subprocess.run().
-
-    The script:
-      1. Defines the code (with forbidden imports stripped)
-      2. Calls the function with the test input
-      3. Prints the repr of the return value
-
-    Returns a dict with keys: stdout, stderr, ok, error.
-    """
     # Build the full script that the subprocess will execute
     # Dedent so class-wrapped or indented code starts at column 0
     import textwrap as _tw
@@ -376,14 +302,6 @@ def _run_single_test(
 
 
 def _outputs_match(actual: str, expected: str) -> bool:
-    """
-    Compare actual subprocess output with expected value.
-
-    Handles common repr differences:
-      • whitespace / trailing newlines
-      • string quoting (single vs double quotes)
-      • numeric equivalence (1.0 == 1)
-    """
     actual = actual.strip()
     expected = expected.strip()
 
@@ -423,46 +341,6 @@ def verify_code_claim(
     code_snippet: str,
     ground_truth_code: str = "",
 ) -> Dict[str, Any]:
-    """
-    Verify a code-related claim by generating and executing test cases.
-
-    Pipeline:
-      1. Local LLM (Ollama) generates 3 test cases for the code snippet.
-         Falls back to a trivial crash test if LLM response is unparseable.
-      2. Forbidden imports (os, sys, subprocess, etc.) are stripped.
-      3. Each test runs in an isolated subprocess (``subprocess.run``,
-         never ``eval``/``exec``) with a 5-second timeout.
-      4. Returns a verdict based on pass/fail ratio.
-
-        Differential testing (optional):
-            - If ``ground_truth_code`` is provided, each failing claim-test is re-run
-                on the ground-truth implementation.
-            - If the ground truth also fails, that test is discarded as invalid.
-            - A test is counted as CONTRADICTED only when submitted code fails and
-                ground truth passes.
-
-        Args:
-        claim:        The atomic claim about the code (e.g., "this function
-                      returns -1 when the target is not found").
-        code_snippet: The code being verified (should contain at least one
-                      function definition).
-                ground_truth_code:
-                                            Optional HumanEval reference implementation used for
-                                            differential testing.
-
-    Returns:
-        Dict with:
-          - ``"verdict"``: ``"SUPPORTED"`` (all pass), ``"CONTRADICTED"``
-            (any fail), or ``"UNKNOWN"`` (no tests / couldn't run).
-          - ``"failed_tests"``: List of dicts describing each failed test,
-            with keys ``description``, ``input``, ``expected``, ``actual``,
-            ``error``.
-                    - ``"tests_generated"``: number of generated test cases.
-                    - ``"discarded_invalid_tests"``: number of tests discarded because
-                        both submitted and ground-truth failed.
-                    - ``"tests_kept"``: number of tests retained for verdicting.
-                    - ``"final_verdict"``: same as ``"verdict"`` (explicit summary key).
-    """
     if not code_snippet or not code_snippet.strip():
         logger.warning("code_claim_verifier | Empty code snippet.")
         return {"verdict": "UNKNOWN", "failed_tests": []}

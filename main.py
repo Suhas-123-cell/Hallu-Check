@@ -1,13 +1,3 @@
-"""
-hallu-check  |  main.py
-FastAPI application — Agentic Multi-Hop Hallucination Detection Pipeline.
-
-Node 0 (Gatekeeper) classifies each query, then routes it:
-
-  FACTUAL  → Node 1 → Node 2 → Node 3 (C-RAG) → Node 4 → Node 5 → Node 6 → Node 7
-  REASONING → Node 1 → Node 5 → Node 6 → Node 7 (skip web search)
-  CHITCHAT  → Node 1 → Node 7 (return immediately)
-"""
 from __future__ import annotations
 
 import asyncio
@@ -52,7 +42,6 @@ logger = logging.getLogger("hallu-check")
 # ── NLTK resource bootstrap ──────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Download NLTK data once at start-up."""
     logger.info("Downloading NLTK punkt tokenizer…")
 
     # ── Workaround for macOS Python SSL Certificate issues during NLTK download ──
@@ -137,7 +126,6 @@ async def health() -> dict:
 
 # ── CHITCHAT handler ─────────────────────────────────────────────────────────
 async def _handle_chitchat(query: str) -> GenerateResponse:
-    """Handle CHITCHAT queries: Node 1 → return immediately."""
     logger.info("── Route: CHITCHAT → Node 1 only")
 
     llm_output = await asyncio.to_thread(generate_llm_output, query)
@@ -158,12 +146,6 @@ async def _handle_chitchat(query: str) -> GenerateResponse:
 
 # ── REASONING handler ────────────────────────────────────────────────────────
 async def _handle_reasoning(query: str) -> GenerateResponse:
-    """
-    Handle REASONING queries with sub-classification:
-      REASONING_CODE  → Node 1 → EGV (execution verification) → ICR
-      REASONING_MATH  → Node 1 → EGV (math verification) → ICR
-      REASONING_LOGIC → Node 1 → RLM → Node 5 (NLI) → ICR
-    """
     # Sub-classify the REASONING query
     reasoning_subtype = await asyncio.to_thread(classify_reasoning_subtype, query)
     logger.info("── Route: %s → specialized pipeline", reasoning_subtype)
@@ -332,11 +314,6 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
 
 # ── FACTUAL handler ──────────────────────────────────────────────────────────
 async def _handle_factual(query: str) -> GenerateResponse:
-    """
-    Handle FACTUAL queries: full pipeline.
-    Node 1 → Node 2 → Node 3 (C-RAG) → Node 4 → Node 5 → Node 6 → Node 7.
-    Uses UUID-based temp files for concurrent safety.
-    """
     logger.info("── Route: FACTUAL → full pipeline")
 
     # Generate a unique temp markdown path for this request
@@ -564,15 +541,6 @@ _PIPELINE_TIMEOUT = 300  # 5 minutes — enough for massive inputs through all n
 # ── Main pipeline endpoint ───────────────────────────────────────────────────
 @app.post("/generate", response_model=GenerateResponse, tags=["pipeline"])
 async def generate(payload: GenerateRequest) -> GenerateResponse:
-    """
-    Agentic hallucination-detection pipeline with semantic routing.
-
-    **Node 0 (Gatekeeper)** classifies the query, then routes to:
-    - **FACTUAL**: Full pipeline (Nodes 1→7) with web search, PageIndex RAG,
-      claim verification, and refinement.
-    - **REASONING**: Skip web search (Nodes 1→5→6) for logic/coding queries.
-    - **CHITCHAT**: Immediate LLM response (Node 1 only).
-    """
     query = payload.query
     logger.info("═══════ Pipeline start: %r ═══════", query)
 
@@ -602,7 +570,6 @@ async def generate(payload: GenerateRequest) -> GenerateResponse:
 
 
 async def _run_pipeline(query: str) -> GenerateResponse:
-    """Inner pipeline logic, separated for asyncio.wait_for timeout wrapping."""
     # ── Node 0: Gatekeeper — classify query ──────────────────────
     logger.info("── Node 0: Classifying query…")
     classification = await asyncio.to_thread(classify_query, query)

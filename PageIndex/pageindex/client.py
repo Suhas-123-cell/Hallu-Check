@@ -16,7 +16,6 @@ META_INDEX = "_meta.json"
 
 
 def _normalize_retrieve_model(model: str) -> str:
-    """Preserve supported Agents SDK prefixes and route other provider paths via LiteLLM."""
     passthrough_prefixes = ("litellm/", "openai/")
     if not model or "/" not in model:
         return model
@@ -26,12 +25,6 @@ def _normalize_retrieve_model(model: str) -> str:
 
 
 class PageIndexClient:
-    """
-    A client for indexing and retrieving document content.
-    Flow: index() -> get_document() / get_document_structure() / get_page_content()
-
-    For agent-based QA, see examples/agentic_vectorless_rag_demo.py.
-    """
     def __init__(self, api_key: str = None, model: str = None, retrieve_model: str = None, workspace: str = None):
         if api_key:
             os.environ["OPENAI_API_KEY"] = api_key
@@ -53,7 +46,6 @@ class PageIndexClient:
             self._load_workspace()
 
     def index(self, file_path: str, mode: str = "auto") -> str:
-        """Index a document. Returns a document_id."""
         # Persist a canonical absolute path so workspace reloads do not
         # reinterpret caller-relative paths against the workspace directory.
         file_path = os.path.abspath(os.path.expanduser(file_path))
@@ -131,7 +123,6 @@ class PageIndexClient:
 
     @staticmethod
     def _make_meta_entry(doc: dict) -> dict:
-        """Build a lightweight meta entry from a document dict."""
         entry = {
             'type': doc.get('type', ''),
             'doc_name': doc.get('doc_name', ''),
@@ -146,7 +137,6 @@ class PageIndexClient:
 
     @staticmethod
     def _read_json(path) -> dict | None:
-        """Read a JSON file, returning None on any error."""
         try:
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
@@ -168,7 +158,6 @@ class PageIndexClient:
         self.documents[doc_id].pop('pages', None)
 
     def _rebuild_meta(self) -> dict:
-        """Scan individual doc JSON files and return a meta dict."""
         meta = {}
         for path in self.workspace.glob("*.json"):
             if path.name == META_INDEX:
@@ -179,7 +168,6 @@ class PageIndexClient:
         return meta
 
     def _read_meta(self) -> dict | None:
-        """Read and validate _meta.json, returning None on any corruption."""
         meta = self._read_json(self.workspace / META_INDEX)
         if meta is not None and not isinstance(meta, dict):
             print(f"Warning: {META_INDEX} is not a JSON object, ignoring")
@@ -206,7 +194,6 @@ class PageIndexClient:
             self.documents[doc_id] = doc
 
     def _ensure_doc_loaded(self, doc_id: str):
-        """Load full document JSON on demand (structure, pages, etc.)."""
         doc = self.documents.get(doc_id)
         if not doc or doc.get('structure') is not None:
             return
@@ -218,17 +205,14 @@ class PageIndexClient:
             doc['pages'] = full['pages']
 
     def get_document(self, doc_id: str) -> str:
-        """Return document metadata JSON."""
         return get_document(self.documents, doc_id)
 
     def get_document_structure(self, doc_id: str) -> str:
-        """Return document tree structure JSON (without text fields)."""
         if self.workspace:
             self._ensure_doc_loaded(doc_id)
         return get_document_structure(self.documents, doc_id)
 
     def get_page_content(self, doc_id: str, pages: str) -> str:
-        """Return page content for the given pages string (e.g. '5-7', '3,8', '12')."""
         if self.workspace:
             self._ensure_doc_loaded(doc_id)
         return get_page_content(self.documents, doc_id, pages)

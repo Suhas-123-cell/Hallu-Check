@@ -1,26 +1,3 @@
-"""
-hallu-check | nodes/pageindex_rag.py
-Node 4 — PageIndex Vectorless RAG
-
-Builds a hierarchical tree-structure index from scraped Markdown using
-VectifyAI/PageIndex, then performs reasoning-based retrieval through
-tree search using Gemini to extract the most relevant factual context.
-
-CRUCIAL CONSTRAINT: No FAISS, Chroma, embeddings, or text chunking.
-
-Integration approach:
-  - PageIndex is vendored at <project>/PageIndex/
-  - Its LLM layer (utils.py) calls OpenAI via ChatGPT_API_async()
-  - We monkey-patch those functions at import time to use Gemini instead
-  - We also patch count_tokens() to handle non-OpenAI model names
-
-Retrieval follows the official PageIndex pattern (from their RAG cookbook):
-  1. Build the tree with md_to_tree(if_add_node_summary='yes', if_add_node_text='yes')
-  2. Strip 'text' from a copy of the tree → pass the lightweight tree to Gemini
-  3. Gemini reasons over the tree structure + query → returns relevant node_ids
-  4. Use a node_id → node mapping to collect the original text from those nodes
-  5. Concatenated node texts = RAG Output
-"""
 from __future__ import annotations
 
 import asyncio
@@ -55,7 +32,6 @@ if _PAGEINDEX_DIR not in sys.path:
 # 2. Monkey-patch PageIndex's LLM calls BEFORE importing pageindex modules
 # ─────────────────────────────────────────────────────────────────────────────
 def _setup_llm():
-    """Validate HuggingFace API token."""
     if not HF_API_TOKEN:
         raise EnvironmentError(
             "HF_API_TOKEN is not set. Add it to your .env file.\n"
@@ -65,7 +41,6 @@ def _setup_llm():
 
 
 def _hf_chat(model_name: str, prompt: str, **_kwargs) -> str:
-    """Synchronous HuggingFace call — replaces ChatGPT_API()."""
     _setup_llm()
     client = InferenceClient(api_key=HF_API_TOKEN, timeout=120)
     response = client.chat_completion(
@@ -83,9 +58,6 @@ def _hf_chat(model_name: str, prompt: str, **_kwargs) -> str:
 
 
 async def _hf_chat_async(model_name: str, prompt: str, **_kwargs) -> str:
-    """Async HuggingFace call — replaces ChatGPT_API_async().
-    huggingface_hub has no native async, so we run in a thread pool.
-    """
     _setup_llm()
     loop = asyncio.get_running_loop()
 
@@ -108,10 +80,6 @@ async def _hf_chat_async(model_name: str, prompt: str, **_kwargs) -> str:
 
 
 def _patched_count_tokens(text: str, model: str | None = None) -> int:
-    """
-    Drop-in for pageindex.utils.count_tokens().
-    Handles non-OpenAI model names by falling back to cl100k_base.
-    """
     if not text:
         return 0
     try:
@@ -150,11 +118,6 @@ from pageindex.utils import (  # type: ignore[import-not-found]  # noqa: E402
 # 3. Helper: create_node_mapping (not in vendored utils — only in paid client)
 # ─────────────────────────────────────────────────────────────────────────────
 def create_node_mapping(tree_structure: Any) -> Dict[str, Dict]:
-    """
-    Flatten the tree into a dict keyed by node_id → node dict.
-    This replicates the function available in the PageIndex API client
-    but missing from the open-source vendored code.
-    """
     mapping: Dict[str, Dict] = {}
 
     def _walk(node: Any) -> None:
@@ -176,10 +139,6 @@ def create_node_mapping(tree_structure: Any) -> Dict[str, Dict]:
 # 4. Build the PageIndex tree
 # ─────────────────────────────────────────────────────────────────────────────
 async def build_tree_index(md_path: str) -> Dict[str, Any]:
-    """
-    Call PageIndex's md_to_tree() to build a hierarchical tree index
-    with node summaries AND full text over the scraped Markdown file.
-    """
     logger.info("Node 4 | Building PageIndex tree from: %s", md_path)
     
     # Verify the file exists and has content
@@ -232,13 +191,6 @@ async def tree_search_retrieve(
     tree_structure: Dict[str, Any],
     query: str,
 ) -> str:
-    """
-    Perform reasoning-based retrieval via tree search.
-
-    Follows the official PageIndex pattern: one LLM call with the
-    full tree structure (sans text) to identify relevant nodes,
-    then look up the original text from the selected node_ids.
-    """
     structure = tree_structure.get("structure", tree_structure)
 
     # Build node_id → node mapping (with full text)
@@ -360,19 +312,6 @@ async def tree_search_retrieve(
 # 7. Alignment Scoring (NLI-based, replaces BERTScore)
 # ─────────────────────────────────────────────────────────────────────────────
 def evaluate_alignment(candidate: str, reference: str) -> dict:
-    """
-    Compute NLI-based alignment between candidate (LLM output) and
-    reference (RAG context). Replaces BERTScore.
-
-    Why NLI instead of BERTScore:
-      - BERTScore measures word/embedding similarity
-      - "Modi is President" scores HIGH against "Modi is PM" on BERTScore
-      - NLI correctly classifies this as CONTRADICTION
-
-    Returns:
-        Dict with 'alignment_score', 'precision', 'recall', 'f1' (for
-        backward compatibility), and 'method'.
-    """
     try:
         from nodes.nli_model import compute_nli_alignment, is_loaded, load_model  # type: ignore
 
@@ -412,7 +351,6 @@ def evaluate_alignment(candidate: str, reference: str) -> dict:
 
 # Backward compatibility alias
 def evaluate_bertscore(candidate: str, reference: str, **kwargs) -> dict:
-    """DEPRECATED: Use evaluate_alignment() instead. Kept for backward compatibility."""
     return evaluate_alignment(candidate, reference)
 
 
@@ -420,19 +358,6 @@ def evaluate_bertscore(candidate: str, reference: str, **kwargs) -> dict:
 # 6. Public API — build + retrieve in one call
 # ─────────────────────────────────────────────────────────────────────────────
 async def run_pageindex_rag(md_path: str, query: str) -> str:
-    """
-    Node 4 — Full PageIndex RAG pipeline:
-      1. Build hierarchical tree index from scraped Markdown
-      2. Reasoning-based tree-search retrieval using Gemini
-      3. Return the most relevant factual context (RAG Output)
-
-    Args:
-        md_path: Path to the scraped Markdown file (output of Node 3).
-        query:   The user's original query.
-
-    Returns:
-        RAG Output string — factual context for hallucination comparison.
-    """
     tree = await build_tree_index(md_path)
     rag_output = await tree_search_retrieve(tree, query)
     return rag_output
@@ -447,23 +372,6 @@ async def run_pageindex_rag_with_bertscore(
     lang: str = "en",
     model_type: str = "distilbert-base-uncased",
 ) -> dict:
-    """
-    Run the full PageIndex RAG pipeline and evaluate the output with
-    NLI-based alignment scoring (replaces BERTScore).
-
-    The function name is preserved for backward compatibility but internally
-    uses NLI alignment when the model is available.
-
-    Args:
-        md_path: Path to the scraped Markdown file (output of Node 3).
-        query:   The user's original query.
-        llm_output: LLM answer to compare against retrieved context.
-        lang: (DEPRECATED) Ignored — kept for backward compatibility.
-        model_type: (DEPRECATED) Ignored — kept for backward compatibility.
-    Returns:
-        Dict with 'rag_output' and 'alignment_score' (precision, recall, f1,
-        alignment_score, method).
-    """
     tree = await build_tree_index(md_path)
     rag_output = await tree_search_retrieve(tree, query)
     alignment = evaluate_alignment(llm_output, rag_output)

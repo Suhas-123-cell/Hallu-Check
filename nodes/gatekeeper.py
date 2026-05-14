@@ -1,22 +1,3 @@
-"""
-hallu-check | nodes/gatekeeper.py
-Node 0 — Semantic Query Router (Gatekeeper)
-
-Classifies incoming queries into one of three categories using a two-stage
-approach:
-  Stage 1: Fast heuristic pre-classifier (keyword + pattern matching)
-  Stage 2: LLM-based classification via Llama 3.2-1B (only if heuristic is unsure)
-
-Categories:
-  • FACTUAL:   Requires real-world data, web search, and factual verification.
-  • REASONING: Requires logic, coding, math, or text transformation.
-  • CHITCHAT:  Conversational greetings or simple interactions.
-
-The classification determines which pipeline path the query takes:
-  - FACTUAL  → full pipeline (Nodes 1-7)
-  - REASONING → Node 1 → Node 5 → Node 6 (skip web search)
-  - CHITCHAT  → Node 1 → return immediately
-"""
 from __future__ import annotations
 
 import json
@@ -109,12 +90,6 @@ _FACTUAL_KEYWORDS = [
 
 
 def _heuristic_classify(query: str) -> Dict[str, object] | None:
-    """
-    Stage 1: Fast heuristic pre-classifier.
-
-    Returns a classification dict if confident, or None to fall through
-    to the LLM-based classifier.
-    """
     query_lower = query.lower().strip()
 
     # ── Check CHITCHAT first (short, simple greetings) ────────────────
@@ -177,22 +152,6 @@ Respond with ONLY this JSON (no other text):
 
 
 def classify_query(query: str) -> Dict[str, object]:
-    """
-    Node 0 — Classify the user's query for intelligent pipeline routing.
-
-    Uses a two-stage approach:
-      1. Fast heuristic pre-classifier (patterns + keywords)
-      2. LLM-based fallback via Llama 3.2-1B (only if heuristic is unsure)
-
-    Falls back to FACTUAL (safest path) if all classification fails.
-
-    Args:
-        query: The user's raw query string.
-
-    Returns:
-        Dict with "category" (str) and "confidence" (float).
-        Example: {"category": "FACTUAL", "confidence": 0.92}
-    """
     logger.info("Node 0 | Classifying query: %r", query[:100])
 
     # ── Stage 1: Heuristic pre-classifier ─────────────────────────────
@@ -251,10 +210,6 @@ def classify_query(query: str) -> Dict[str, object]:
 
 
 def _parse_classification(raw: str) -> Dict[str, object]:
-    """
-    Parse the LLM's classification response. Tries strict JSON first,
-    then falls back to regex extraction. Always returns a valid dict.
-    """
     # Attempt 1: Direct JSON parse
     try:
         parsed = json.loads(raw)
@@ -324,15 +279,6 @@ _MATH_EXPR_PATTERNS = [
 
 
 def classify_reasoning_subtype(query: str) -> str:
-    """
-    Sub-classify a REASONING query into CODE, MATH, or LOGIC.
-
-    Args:
-        query: The user's query (already classified as REASONING).
-
-    Returns:
-        One of: "REASONING_CODE", "REASONING_MATH", "REASONING_LOGIC"
-    """
     query_lower = query.lower()
 
     # Check for code patterns (highest priority — code often contains math)

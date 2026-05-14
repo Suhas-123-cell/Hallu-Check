@@ -32,7 +32,6 @@ SCRAPED_MD_DIR: str = os.getenv("SCRAPED_MD_DIR", "/tmp/hallu-check")
 
 
 def generate_md_path() -> str:
-    """Generate a unique, concurrent-safe markdown file path."""
     md_dir = Path(SCRAPED_MD_DIR)
     md_dir.mkdir(parents=True, exist_ok=True)
     return str(md_dir / f"hallu_{uuid.uuid4().hex[:12]}.md")

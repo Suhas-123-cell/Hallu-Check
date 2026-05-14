@@ -1,17 +1,3 @@
-"""
-hallu-check | nodes/local_llm.py
-Local LLM inference via Ollama (OpenAI-compatible API)
-
-Provides a unified interface for all LLM calls in the pipeline:
-  - Code generation (Node 1)
-  - Test case generation (EGV)
-  - Claim classification (Stage 2 fallback)
-
-Stack:  Ollama (localhost:11434) → Llama 3.2 3B → Apple Metal acceleration
-Cost:   $0.00 — everything runs on your MacBook.
-
-Falls back to HuggingFace Inference API if Ollama is not running.
-"""
 from __future__ import annotations
 
 import logging
@@ -30,7 +16,6 @@ _ollama_available: Optional[bool] = None
 
 
 def _get_client():
-    """Lazy-init an OpenAI client pointing at Ollama."""
     global _client
     if _client is None:
         from openai import OpenAI  # type: ignore[import-untyped]
@@ -42,7 +27,6 @@ def _get_client():
 
 
 def is_available() -> bool:
-    """Check if Ollama is running and the model is loaded."""
     global _ollama_available
     if _ollama_available is not None:
         return _ollama_available
@@ -71,18 +55,6 @@ def chat_completion(
     temperature: float = 0.3,
     top_p: float = 0.9,
 ) -> str:
-    """
-    Run a chat completion via Ollama (local) or HuggingFace (fallback).
-
-    Args:
-        messages:    OpenAI-format message list.
-        max_tokens:  Maximum output tokens.
-        temperature: Sampling temperature.
-        top_p:       Nucleus sampling.
-
-    Returns:
-        The model's response text, or empty string on failure.
-    """
     # ── Primary: Ollama (local, free) ────────────────────────────────────
     if is_available():
         try:

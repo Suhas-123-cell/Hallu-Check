@@ -1,17 +1,3 @@
-"""
-hallu-check | nodes/refiner.py
-Node 6 — Prompt Refiner & Reprompt LLM (Gemini)
-
-If hallucination is detected (Node 5), this module creates a Refined
-Prompt that includes the RAG-retrieved ground truth and sends it to
-Gemini to generate a corrected, factual response.
-
-Supports route-aware prompting:
-  • FACTUAL  → strict factual editor prompt (fix claims with evidence)
-  • REASONING → Senior Staff SWE / technical tutor prompt (evaluate logic & code)
-
-Includes rate-limit-aware retry logic for the Gemini free tier.
-"""
 from __future__ import annotations
 
 import logging
@@ -38,7 +24,6 @@ _GEMINI_GENERATE_CONFIG = genai_types.GenerateContentConfig(
 
 
 def _parse_retry_delay(error_msg: str) -> float:
-    """Extract retryDelay seconds from a Gemini 429 error message."""
     # Match patterns like "retryDelay': '31s'" or "retryDelay': '537.373052ms'"
     match = re.search(r"retryDelay['\"]:\s*['\"](\d+(?:\.\d+)?)(s|ms)", str(error_msg))
     if match:
@@ -110,22 +95,6 @@ def _gemini_generate(prompt: str) -> str:
 
 
 def refine_response(query: str, rag_output: str) -> str:
-    """
-    Node 6 — Use Gemini to produce a corrected, factual answer based on
-    RAG-retrieved context.
-
-    Previously used a two-step approach (Gemini rewrites prompt → Llama answers)
-    but the small Llama model almost always outputs "Not found in context."
-    Now Gemini directly synthesizes the answer from the RAG context.
-
-    Args:
-        query:      The user's original question.
-        rag_output: Factual context from PageIndex RAG (Node 4).
-
-    Returns:
-        The refined, corrected answer — or empty string if Gemini is
-        unavailable (caller should fall back to original LLM output).
-    """
     logger.info("Node 6 | Refining answer with Gemini…")
 
     prompt = (
@@ -165,7 +134,6 @@ def _build_factual_prompt(
     rag_output: str,
     claim_report: dict,
 ) -> str:
-    """Build the strict factual editor prompt for FACTUAL-routed queries."""
     return (
         "You are a strict factual editor. Your ONLY job is to produce a corrected "
         "answer using EXCLUSIVELY the evidence provided below.\n\n"
@@ -173,24 +141,23 @@ def _build_factual_prompt(
         "• You MUST NOT introduce ANY facts, names, dates, numbers, or claims "
         "that are not EXPLICITLY stated in the Evidence below.\n"
         "• You MUST NOT use your own training knowledge to fill gaps.\n"
-        "• If the Evidence does not contain the answer to the query, say: "
-        "'Based on the available evidence: [summarize what IS known from evidence]. "
-        "The specific answer to [aspect] was not found in the retrieved sources.'\n"
-        "• Remove all CONTRADICTED claims from the original answer.\n"
-        "• Keep all SUPPORTED claims.\n"
-        "• For UNVERIFIABLE claims: remove them — do NOT replace with guesses.\n"
-        "• If the original answer is about a COMPLETELY DIFFERENT topic than the query\n"
-        "  (e.g., query asks about BPE but the answer discusses Backpropagation),\n"
-        "  IGNORE the original answer entirely and write a FRESH answer using\n"
-        "  ONLY the Evidence below.\n\n"
+        "• Replace all CONTRADICTED claims with the correct facts from Evidence.\n"
+        "• Replace all UNVERIFIABLE claims with the correct facts from Evidence "
+        "(the Evidence likely contains the real answer — USE IT).\n"
+        "• Keep all SUPPORTED claims unchanged.\n"
+        "• If the Evidence genuinely does not contain the answer, say: "
+        "'Based on the available evidence, [summarize what IS known].'\n"
+        "• If the original answer is about a COMPLETELY DIFFERENT topic than the query, "
+        "IGNORE the original answer entirely and write a FRESH answer using "
+        "ONLY the Evidence below.\n\n"
+        "OUTPUT FORMAT:\n"
+        "• Write ONLY the corrected, factual answer — nothing else.\n"
+        "• Do NOT include any headers, corrections lists, or follow-up questions.\n"
+        "• Be concise and direct. 1-3 sentences for simple factual queries.\n\n"
         f"Original Query: {query}\n\n"
         f"Evidence (USE ONLY THIS — nothing else):\n{rag_output[:12000]}\n\n"
         f"Verification Report (which claims are true/false/unknown):\n{claim_report}\n\n"
-        "Output format:\n"
-        "1. Write a corrected, factual answer using ONLY the evidence above.\n"
-        "2. List corrections under a '📝 Corrections:' header.\n"
-        "3. End with one engaging follow-up question related to the topic.\n\n"
-        "REMEMBER: If the evidence doesn't contain a specific fact, DO NOT invent it."
+        "Corrected answer:"
     )
 
 
@@ -199,7 +166,6 @@ def _build_reasoning_prompt(
     llm_output: str,
     claim_report: dict,
 ) -> str:
-    """Build the Senior Staff SWE / technical tutor prompt for REASONING-routed queries."""
     return (
         "You are a Senior Staff Software Engineer and an engaging technical tutor.\n\n"
         "Your task is to evaluate the provided code or logic solution, improve it, "
@@ -230,25 +196,6 @@ def refine_with_evidence(
     claim_report: dict,
     route: str = "FACTUAL",
 ) -> str:
-    """
-    Node 6 (Enhanced) — Use Gemini to produce a corrected answer by fixing
-    only the claims that are CONTRADICTED or UNVERIFIABLE.
-
-    Dynamically selects the Gemini system prompt based on the gatekeeper route:
-      • FACTUAL  → strict factual editor (fix claims using RAG evidence)
-      • REASONING → Senior Staff SWE tutor (evaluate code/logic, optimize)
-
-    Args:
-        query:        The user's original question.
-        rag_output:   Factual context from PageIndex RAG (Node 4), or a
-                      synthetic placeholder for REASONING queries.
-        claim_report: The HallucinationReport.to_dict() output.
-        route:        The gatekeeper classification — "FACTUAL" or "REASONING".
-
-    Returns:
-        The refined, corrected answer — or empty string if Gemini
-        is unavailable (caller should fall back to original LLM output).
-    """
     logger.info("Node 6 | Evidence-based refinement (route=%s)…", route)
 
     # ── Select prompt based on gatekeeper route ──────────────────────

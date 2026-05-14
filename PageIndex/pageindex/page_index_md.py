@@ -89,7 +89,6 @@ def extract_node_text_content(node_list, markdown_lines):
 def update_node_list_with_text_token_count(node_list, model=None):
 
     def find_all_children(parent_index, parent_level, node_list):
-        """Find all direct and indirect children of a parent node"""
         children_indices = []
         
         # Look for children after the parent

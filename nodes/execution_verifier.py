@@ -1,24 +1,3 @@
-"""
-hallu-check | nodes/execution_verifier.py
-Contribution 2 — Execution-Grounded Verification (EGV)
-
-For REASONING queries (code/math), NLI verification is meaningless —
-it can't tell if binary_search has an off-by-one error or if a math
-computation is correct.
-
-This module replaces NLI with execution-based verification:
-  • CODE:  Extract code → generate test cases → execute → verify outputs
-  • MATH:  Extract computation → execute in Python → compare with claim
-
-Architecture:
-  1. Detect if the LLM output contains code or math
-  2. Extract the executable portion
-  3. Generate/derive test cases
-  4. Run in the existing sandboxed python_exec.py
-  5. Return structured ExecutionVerdict with pass/fail per test
-
-Uses the existing sandbox in nodes/tools/python_exec.py for safe execution.
-"""
 from __future__ import annotations
 
 import logging
@@ -34,7 +13,6 @@ logger = logging.getLogger("hallu-check.execution_verifier")
 
 @dataclass
 class TestCase:
-    """A single test case for code verification."""
     input_args: str       # e.g., "[1, 3, 5], 3"
     expected_output: str  # e.g., "1"
     description: str = ""
@@ -42,7 +20,6 @@ class TestCase:
 
 @dataclass
 class TestResult:
-    """Result of running a single test case."""
     test_case: TestCase
     actual_output: str
     passed: bool
@@ -51,7 +28,6 @@ class TestResult:
 
 @dataclass
 class ExecutionVerdict:
-    """Structured result of execution-based verification."""
     verdict: str               # "PASS", "FAIL", "ERROR"
     score: float               # 0.0 = all failed, 1.0 = all passed
     total_tests: int
@@ -76,16 +52,6 @@ _FUNCTION_DEF_RE = re.compile(
 
 
 def _extract_code(llm_output: str) -> str:
-    """
-    Extract Python code from LLM output.
-
-    Priority:
-    1. Fenced ```python blocks
-    2. Bare function definitions (with nested function support)
-    3. Any indented code blocks
-
-    Always returns dedented code (column 0).
-    """
     import textwrap as _tw
 
     # Try fenced code blocks first
@@ -151,7 +117,6 @@ def _extract_code(llm_output: str) -> str:
 
 
 def has_code(llm_output: str) -> bool:
-    """Check if LLM output contains executable code."""
     return bool(_extract_code(llm_output))
 
 
@@ -168,16 +133,10 @@ _MATH_EXPRESSION_RE = re.compile(
 
 
 def has_math(llm_output: str) -> bool:
-    """Check if LLM output contains a math computation claim."""
     return bool(_MATH_ANSWER_RE.search(llm_output))
 
 
 def _extract_math_claim(llm_output: str) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Extract a math expression and its claimed result from LLM output.
-
-    Returns (expression, claimed_result) or (None, None).
-    """
     answer_match = _MATH_ANSWER_RE.search(llm_output)
     expr_match = _MATH_EXPRESSION_RE.search(llm_output)
 
@@ -193,12 +152,6 @@ def _generate_test_cases_from_query(
     query: str,
     code: str,
 ) -> List[TestCase]:
-    """
-    Generate test cases from the query context and code structure.
-
-    Uses heuristics + pattern matching to create meaningful test cases
-    without needing an LLM call (zero additional cost).
-    """
     tests: List[TestCase] = []
 
     # Extract function name and parameters
@@ -290,12 +243,6 @@ def _generate_test_cases_llm(
     query: str,
     code: str,
 ) -> List[TestCase]:
-    """
-    Generate test cases using the LLM (Llama) for complex functions
-    where heuristics fail.
-
-    Only called as a fallback when heuristic generation produces 0 tests.
-    """
     from huggingface_hub import InferenceClient  # type: ignore[import-untyped, import-not-found]
     from config import HF_API_TOKEN, LOCAL_MODEL_ID  # type: ignore[import-not-found]
 
@@ -367,7 +314,6 @@ def _run_test(
     test_case: TestCase,
     timeout: int = 10,
 ) -> TestResult:
-    """Run a single test case against the extracted code."""
     # Dedent the code first so it starts at column 0,
     # then concatenate (never embed multi-line code inside textwrap.dedent)
     clean_code = textwrap.dedent(code)
@@ -423,22 +369,6 @@ def verify_code(
     llm_output: str,
     query: str,
 ) -> ExecutionVerdict:
-    """
-    Verify code correctness through execution.
-
-    Pipeline:
-      1. Extract code from LLM output
-      2. Generate test cases (heuristic, then LLM fallback)
-      3. Execute each test in the sandbox
-      4. Return structured verdict
-
-    Args:
-        llm_output: The LLM's full output containing code.
-        query: The user's original query (for test generation context).
-
-    Returns:
-        ExecutionVerdict with pass/fail details.
-    """
     code = _extract_code(llm_output)
     if not code:
         return ExecutionVerdict(
@@ -510,7 +440,6 @@ def verify_code(
 
 
 def _verify_script(code: str) -> ExecutionVerdict:
-    """Verify a standalone script (no function) by just running it."""
     try:
         result = run_python(code)
         output = result.render().strip()
@@ -553,19 +482,6 @@ def verify_math(
     llm_output: str,
     query: str,
 ) -> ExecutionVerdict:
-    """
-    Verify mathematical claims by executing them in Python.
-
-    Extracts math expressions and claimed results from the LLM output,
-    then runs the actual computation to verify correctness.
-
-    Args:
-        llm_output: The LLM's output containing math claims.
-        query: The user's original query.
-
-    Returns:
-        ExecutionVerdict with pass/fail for the math computation.
-    """
     expression, claimed_result = _extract_math_claim(llm_output)
 
     if not expression and not claimed_result:

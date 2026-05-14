@@ -1,21 +1,3 @@
-"""
-hallu-check | DEPTH2_CRAWLING.py
-Depth-2 Crawling Feature for Web Search & Scraping
-
-This module implements targeted depth-2 crawling with strict semantic filtering.
-It can be integrated into nodes/web_search.py to enhance the RAG context with
-secondary content extracted from linked pages.
-
-Features:
-  - Fetch top 20 URLs from DuckDuckGo (primary pages)
-  - Extract all links (<a> tags) from primary pages
-  - Strict semantic filter: only follow links if URL or anchor text contains keywords
-  - Limit to 3-5 secondary links per primary page (prevents bloat)
-  - Scrape secondary page text with robust error handling
-  - Randomized rate limiting (1-3s between secondary requests)
-  - Return consolidated list with primary + secondary content
-"""
-
 from __future__ import annotations
 
 import logging
@@ -37,17 +19,6 @@ logger = logging.getLogger("hallu-check.depth2_crawling")
 # 1. Link Extraction from HTML
 # ─────────────────────────────────────────────────────────────────────────────
 def extract_links(html: str, base_url: str) -> List[Tuple[str, str]]:
-    """
-    Extract all <a> tags from HTML and return (href, anchor_text) pairs.
-    Handles relative URLs by converting them to absolute URLs.
-    
-    Args:
-        html: Raw HTML content of a page.
-        base_url: Base URL for resolving relative links.
-    
-    Returns:
-        List of tuples: (absolute_url, anchor_text_lowercase).
-    """
     try:
         soup = BeautifulSoup(html, "lxml")
         links = []
@@ -76,30 +47,6 @@ def filter_links_by_keywords(
     keywords: List[str], 
     max_links: int = 5
 ) -> List[str]:
-    """
-        STRICT SEMANTIC FILTER: Only keep links where the URL or anchor text 
-        contains at least ONE of the original search keywords.
-    
-        This prevents PageIndex from being flooded with irrelevant data by:
-            1. Checking both URL and anchor text against ALL keywords
-            2. Requiring at least ONE keyword match (OR logic)
-            3. Limiting to max_links to prevent context bloat
-            4. Avoiding duplicates
-    
-    Example:
-      keywords = ["python", "tutorial", "machine learning"]
-      link_1 = ("https://example.com/python-tutorial", "Learn Python Basics") → KEEP
-      link_2 = ("https://example.com/unrelated", "Random Article") → DROP
-      link_3 = ("https://github.com/ml-repo", "ML Resources") → KEEP (matches "machine learning" in URL)
-    
-    Args:
-        links: List of (url, anchor_text) tuples.
-        keywords: Original search keywords.
-        max_links: Maximum number of links to return (default: 5).
-    
-    Returns:
-        Filtered list of URLs (up to max_links).
-    """
     core_keywords = set(kw.lower() for kw in keywords)
     filtered = []
     
@@ -125,19 +72,6 @@ def crawl_secondary_content(
     timeout: float = 5.0,
     max_secondary_per_page: int = 3
 ) -> List[str]:
-    """
-    Visit secondary (linked) pages from a primary page and extract their text.
-    Implements strict semantic filtering and rate limiting.
-    
-    Args:
-        primary_url: The primary page URL to extract links from.
-        keywords: Original search keywords for semantic filtering.
-        timeout: HTTP timeout per request (seconds).
-        max_secondary_per_page: Max secondary links to crawl per primary page.
-    
-    Returns:
-        List of secondary page texts (empty list if no valid secondary links).
-    """
     secondary_texts = []
     
     try:
@@ -212,21 +146,6 @@ def crawl_secondary_content(
 # 4. Markdown Builder for Depth-2 Results
 # ─────────────────────────────────────────────────────────────────────────────
 def build_markdown_with_depth2(results: List[dict]) -> str:
-    """
-    Build markdown from consolidated primary + secondary content.
-    
-    Each result dict contains:
-      - title: Page title
-      - primary_url: Primary page URL
-      - primary_text: Main text from primary page
-      - secondary_context: List of texts from secondary (linked) pages
-    
-    Args:
-        results: List of result dictionaries.
-    
-    Returns:
-        Consolidated markdown string ready for PageIndex ingestion.
-    """
     parts: List[str] = ["# Retrieved Web Sources (with Depth-2 Context)\n\n"]
 
     for result in results:

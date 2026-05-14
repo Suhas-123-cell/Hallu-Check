@@ -1,15 +1,3 @@
-"""
-hallu-check | nodes/nli_model.py
-Singleton wrapper for the fine-tuned DeBERTa-v3-base NLI model.
-
-Provides deterministic, calibrated NLI classification:
-  - entailment   → SUPPORTED      (claim is confirmed by evidence)
-  - neutral      → UNVERIFIABLE   (evidence is silent on the claim)
-  - contradiction → CONTRADICTED  (evidence directly conflicts with claim)
-
-Loaded once at import time (singleton pattern). All subsequent calls
-reuse the same model and tokenizer for fast ~50ms inference on MPS.
-"""
 from __future__ import annotations
 
 import json
@@ -25,7 +13,7 @@ from transformers import (  # type: ignore[import-untyped]
 
 logger = logging.getLogger("hallu-check.nli_model")
 
-# ── Label mappings ────────────────────────────────────────────────────────────
+# ── Label mappings 
 NLI_TO_VERDICT = {
     "entailment": "SUPPORTED",
     "neutral": "UNVERIFIABLE",
@@ -33,7 +21,7 @@ NLI_TO_VERDICT = {
 }
 LABEL_NAMES = ["entailment", "neutral", "contradiction"]
 
-# ── Singleton state ───────────────────────────────────────────────────────────
+# ── Singleton state 
 _model: Optional[AutoModelForSequenceClassification] = None
 _tokenizer: Optional[DebertaV2Tokenizer] = None
 _device: Optional[torch.device] = None
@@ -41,7 +29,6 @@ _loaded: bool = False
 
 
 def _detect_device() -> torch.device:
-    """Auto-detect the best available device."""
     if torch.backends.mps.is_available():
         return torch.device("mps")
     elif torch.cuda.is_available():
@@ -53,17 +40,6 @@ def load_model(
     model_path: str | None = None,
     device: str | None = None,
 ) -> bool:
-    """
-    Load the trained NLI model (singleton — only loads once).
-
-    Args:
-        model_path: Path to the trained model directory. If None, uses
-                    the default path from config.
-        device: Device string ('mps', 'cuda', 'cpu'). Auto-detects if None.
-
-    Returns:
-        True if the model loaded successfully, False otherwise.
-    """
     global _model, _tokenizer, _device, _loaded
 
     if _loaded:
@@ -114,33 +90,15 @@ def load_model(
 
 
 def is_loaded() -> bool:
-    """Check if the NLI model is currently loaded."""
     return _loaded
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Single-pair classification
-# ─────────────────────────────────────────────────────────────────────────────
+
 def classify_nli(
     premise: str,
     hypothesis: str,
     max_length: int = 256,
 ) -> Dict:
-    """
-    Classify a single premise-hypothesis pair using the NLI model.
-
-    Args:
-        premise: The evidence / RAG context (what we know to be true).
-        hypothesis: The claim to verify (extracted from the LLM output).
-        max_length: Max token length for the input pair.
-
-    Returns:
-        Dict with:
-          - label: str ("entailment", "neutral", "contradiction")
-          - verdict: str ("SUPPORTED", "UNVERIFIABLE", "CONTRADICTED")
-          - probabilities: dict {label_name: float} — calibrated softmax probs
-          - confidence: float — probability of the predicted label
-    """
     if not _loaded or _model is None or _tokenizer is None:
         raise RuntimeError(
             "NLI model not loaded. Call load_model() first or run train_nli.py."
@@ -182,25 +140,11 @@ def classify_nli(
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Batch classification (for multiple claims at once)
-# ─────────────────────────────────────────────────────────────────────────────
 def classify_nli_batch(
     pairs: List[Tuple[str, str]],
     max_length: int = 256,
     batch_size: int = 16,
 ) -> List[Dict]:
-    """
-    Classify multiple premise-hypothesis pairs in batches.
-
-    Args:
-        pairs: List of (premise, hypothesis) tuples.
-        max_length: Max token length per pair.
-        batch_size: Number of pairs to process at once.
-
-    Returns:
-        List of dicts (same format as classify_nli output).
-    """
     if not _loaded or _model is None or _tokenizer is None:
         raise RuntimeError(
             "NLI model not loaded. Call load_model() first or run train_nli.py."
@@ -262,21 +206,6 @@ def compute_nli_alignment(
     reference: str,
     max_sentences: int = 10,
 ) -> Dict:
-    """
-    Compute NLI-based alignment between candidate (LLM output) and
-    reference (RAG context). Replaces BERTScore.
-
-    Unlike BERTScore (which measures word/embedding similarity), this
-    measures actual factual entailment — semantically correct.
-
-    Approach:
-      1. Split candidate into sentences
-      2. For each sentence, compute NLI against the full reference
-      3. alignment_score = mean P(entailment) across sentences
-
-    Returns:
-        Dict with 'alignment_score' (0.0 to 1.0) and 'details'.
-    """
     import re
 
     if not _loaded:

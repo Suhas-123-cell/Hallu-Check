@@ -1,14 +1,4 @@
-"""
-hallu-check | nodes/generator.py
-Node 1 — Original LLM Generator
 
-Calls Llama 3.2 via Ollama (local, free) or HuggingFace Inference API
-(fallback) and returns a preliminary answer.
-
-Priority:
-  1. Ollama (localhost:11434) — free, no quota, Metal-accelerated
-  2. HuggingFace Inference API — free tier, may hit quota limits
-"""
 from __future__ import annotations
 
 import logging
@@ -25,17 +15,7 @@ logger = logging.getLogger("hallu-check.generator")
     reraise=True,
 )
 def generate_llm_output(query: str) -> str:
-    """
-    Node 1 — generate a preliminary LLM answer.
-
-    Uses Ollama (local) as primary backend, falls back to HuggingFace API.
-
-    Args:
-        query: The user's natural-language question.
-
-    Returns:
-        The model's raw text response (the LLM Output).
-    """
+  
     messages = [
         {
             "role": "system",
@@ -114,17 +94,8 @@ def generate_llm_output_with_context(
     context: str,
     system_prompt: str | None = None,
 ) -> str:
-    """
-    Node 1 (contextual) — generate an answer grounded in RAG context.
-
-    Args:
-        query: The refined user question/prompt.
-        context: Retrieved factual context to ground the answer.
-        system_prompt: Optional system prompt override.
-
-    Returns:
-        The model's grounded text response.
-    """
+    """ Node-1"""
+    
     base_system_prompt = (
         system_prompt
         or "You are a factual question-answering assistant. "

@@ -1,9 +1,0 @@
-{
-  "dataset": "TruthfulQA",
-  "total_samples": 200,
-  "misconceptions_detected": 197,
-  "misconceptions_missed": 3,
-  "detection_rate": 0.985,
-  "elapsed_seconds": 8.4,
-  "ms_per_sample": 41.8
-}

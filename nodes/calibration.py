@@ -1,18 +1,3 @@
-"""
-hallu-check | nodes/calibration.py
-Platt Scaling confidence calibration for NLI model outputs.
-
-The raw softmax probabilities from the NLI model are often
-overconfident. Platt scaling (logistic regression on logits)
-produces properly calibrated probabilities where a 0.8 confidence
-actually means 80% accuracy.
-
-Usage:
-    # Train calibration (run once):
-    python -m nodes.calibration --train
-
-    # Calibration is then auto-applied in nli_model.py
-"""
 from __future__ import annotations
 
 import json
@@ -36,7 +21,6 @@ _params: Optional[Dict] = None
 
 
 def _load_params() -> Optional[Dict]:
-    """Load calibration parameters from disk."""
     global _params
     if _params is not None:
         return _params
@@ -55,18 +39,6 @@ def _load_params() -> Optional[Dict]:
 
 
 def calibrate(probs: Dict[str, float]) -> Dict[str, float]:
-    """
-    Apply Platt scaling to raw NLI probabilities.
-
-    If calibration parameters are not available, returns raw probs unchanged.
-
-    Args:
-        probs: Dict with keys 'entailment', 'neutral', 'contradiction'
-              and raw softmax probability values.
-
-    Returns:
-        Calibrated probability dict (same keys).
-    """
     params = _load_params()
     if params is None:
         return probs  # no calibration available
@@ -101,19 +73,6 @@ def train_calibration(
     val_parquet: str = os.path.expanduser("~/Downloads/validation_matched-00000-of-00001.parquet"),
     max_samples: int = 2000,
 ) -> Dict:
-    """
-    Train Platt scaling parameters on the MNLI validation set.
-
-    Runs the NLI model on val samples, collects (raw_prob, true_label) pairs,
-    and fits logistic regression per class.
-
-    Args:
-        val_parquet: Path to MNLI validation parquet file.
-        max_samples: Number of samples to use for calibration.
-
-    Returns:
-        Dict with calibration parameters.
-    """
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
     import pandas as pd

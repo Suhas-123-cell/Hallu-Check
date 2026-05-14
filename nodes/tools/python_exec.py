@@ -1,20 +1,3 @@
-"""
-hallu-check | nodes/tools/python_exec.py
-Sandboxed Python executor for the Recursive Language Model reasoner.
-
-Executes short Python snippets emitted by the LLM inside a subprocess with:
-  • hard wall-clock timeout
-  • isolated cwd (a fresh temp dir, discarded after)
-  • Python's isolated mode (-I) to ignore user site-packages / env vars
-  • output truncation
-  • a small preamble that imports common math libs (math, fractions, decimal,
-    statistics, sympy if available) so the model doesn't need to remember them
-
-This is the "REPL tool" from the MIT RLM paper — the model writes Python
-for any sub-step that is computational (arithmetic, algebra, combinatorics)
-instead of trying to compute it token-by-token, which is where small models
-hallucinate numbers.
-"""
 from __future__ import annotations
 
 import logging
@@ -47,7 +30,6 @@ class ExecResult:
     error: str | None  # populated on timeout / launch failure
 
     def render(self) -> str:
-        """Compact textual form for injection back into the leaf answer."""
         if self.error:
             return f"[python error: {self.error}]"
         if self.ok:
@@ -57,16 +39,6 @@ class ExecResult:
 
 
 def run_python(code: str, timeout: int = _DEFAULT_TIMEOUT) -> ExecResult:
-    """
-    Execute a Python snippet in an isolated subprocess.
-
-    Args:
-        code:    The snippet to run. Will be prefixed with a safe preamble.
-        timeout: Wall-clock timeout in seconds.
-
-    Returns:
-        ExecResult with stdout/stderr and an ok flag.
-    """
     if not code or not code.strip():
         return ExecResult(ok=False, stdout="", stderr="", error="empty code")
 

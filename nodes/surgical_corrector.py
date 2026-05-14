@@ -1,108 +1,29 @@
-"""
-hallu-check | nodes/surgical_corrector.py
-Contribution 3 — Claim-Level Surgical Correction
-
-Instead of rewriting the entire LLM output via a one-shot prompt (which
-often introduces NEW hallucinations, e.g. BPE → BERT), this module
-replaces ONLY the CONTRADICTED claims — one at a time — each constrained
-to its specific evidence snippet.
-
-Why this is better than one-shot rewriting:
-  1. SUPPORTED claims are never touched → no risk of breaking correct facts
-  2. Each replacement prompt is small and focused → fewer refiner hallucinations
-  3. UNVERIFIABLE claims are removed, not replaced with guesses
-  4. The original answer structure is preserved
-
-The refiner sees a micro-prompt per claim:
-  "Replace ONLY this claim using ONLY this evidence. Output ONLY the
-   replacement sentence."
-"""
 from __future__ import annotations
 
 import logging
 import re
-import time
 from typing import List, Optional
 
-import google.genai as genai  # type: ignore[import-not-found, import-untyped]
-from google.genai import types as genai_types  # type: ignore[import-not-found, import-untyped]
-
-from config import GEMINI_API_KEY, GEMINI_MODEL  # type: ignore[import-not-found]
+from nodes.local_llm import chat_completion  # type: ignore[import-not-found]
 
 logger = logging.getLogger("hallu-check.surgical_corrector")
 
-_MAX_RETRIES = 3
-_DEFAULT_RETRY_DELAY = 15
 
-_GEMINI_HTTP_OPTIONS = genai_types.HttpOptions(timeout=60_000)
-_GEMINI_GENERATE_CONFIG = genai_types.GenerateContentConfig(
-    max_output_tokens=512,   # Short — we only need one sentence
-    http_options=_GEMINI_HTTP_OPTIONS,
-)
-
-
-def _gemini_generate_short(prompt: str) -> str:
-    """Call Gemini for a short response (single claim replacement)."""
-    if not GEMINI_API_KEY:
-        return ""
-
-    import ssl
-    import os
-    os.environ["GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"] = ""
+def _local_generate_short(prompt: str) -> str:
+    """Generate a short response using the local LLM (Ollama/HF)."""
+    messages = [
+        {"role": "system", "content": "You are a concise fact corrector. Output ONLY the corrected text — no preamble, no explanation."},
+        {"role": "user", "content": prompt},
+    ]
     try:
-        ssl._create_default_https_context = ssl._create_unverified_context
-    except AttributeError:
-        pass
-
-    client = genai.Client(api_key=GEMINI_API_KEY)
-
-    for attempt in range(1, _MAX_RETRIES + 1):
-        try:
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt,
-                config=_GEMINI_GENERATE_CONFIG,
-            )
-            content = getattr(response, "text", None)
-            if not content and hasattr(response, "candidates"):
-                candidates = getattr(response, "candidates", [])
-                if candidates and hasattr(candidates[0], "text"):
-                    content = candidates[0].text
-            return content.strip() if content else ""
-        except Exception as e:
-            error_str = str(e)
-            is_retryable = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
-            if is_retryable and attempt < _MAX_RETRIES:
-                match = re.search(
-                    r"retryDelay['\"]:\s*['\"](\d+(?:\.\d+)?)(s|ms)",
-                    error_str,
-                )
-                if match:
-                    delay = float(match.group(1))
-                    if match.group(2) == "ms":
-                        delay /= 1000
-                else:
-                    delay = _DEFAULT_RETRY_DELAY
-                delay = min(delay + 1, 60)
-                logger.warning(
-                    "Surgical | Rate-limited (attempt %d/%d), waiting %.1fs…",
-                    attempt, _MAX_RETRIES, delay,
-                )
-                time.sleep(delay)
-                continue
-            logger.warning("Surgical | Gemini call failed: %s", e)
-            return ""
-    return ""
+        result = chat_completion(messages, max_tokens=512, temperature=0.2)
+        return result.strip() if result else ""
+    except Exception as e:
+        logger.warning("Surgical | Local LLM call failed: %s", e)
+        return ""
 
 
 def _find_claim_in_text(claim: str, text: str) -> Optional[str]:
-    """
-    Find the approximate location of a claim in the original text.
-
-    Uses fuzzy matching: finds the sentence in the text that has the
-    highest word overlap with the claim. Returns the matched sentence,
-    or None if no good match is found.
-    """
     # Try exact substring match first
     if claim in text:
         return claim
@@ -148,14 +69,6 @@ def _generate_replacement(
     evidence: str,
     query: str,
 ) -> str:
-    """
-    Generate a replacement for a single CONTRADICTED claim.
-
-    The prompt is deliberately minimal to reduce refiner hallucination:
-    - Only one claim to fix
-    - Only the specific evidence for that claim
-    - Strict instruction to not introduce new facts
-    """
     prompt = (
         "You are a surgical fact corrector. Replace the INCORRECT claim below "
         "with a CORRECTED version using ONLY the evidence provided.\n\n"
@@ -171,7 +84,7 @@ def _generate_replacement(
         "Corrected sentence:"
     )
 
-    replacement = _gemini_generate_short(prompt)
+    replacement = _local_generate_short(prompt)
 
     # Validate: reject if the replacement is empty, too long, or a refusal
     if not replacement:
@@ -194,31 +107,6 @@ def surgical_correct(
     rag_output: str,
     query: str,
 ) -> str:
-    """
-    Contribution 3 — Replace ONLY contradicted claims, one at a time.
-
-    For each CONTRADICTED claim:
-      1. Find its location in the original output
-      2. Generate a micro-replacement using only that claim's evidence
-      3. Substitute it at the exact position
-      4. Validate the replacement doesn't introduce new entities not in evidence
-
-    For UNVERIFIABLE claims:
-      - Remove them (they can't be verified, so don't keep them)
-
-    For SUPPORTED claims:
-      - Keep them untouched
-
-    Args:
-        original_output: The full LLM answer text.
-        claim_verdicts:  List of ClaimVerdict dicts (from HallucinationReport).
-        rag_output:      The RAG-retrieved evidence context.
-        query:           The user's original query.
-
-    Returns:
-        The corrected text with only contradicted claims replaced.
-        Returns the original if no corrections could be made.
-    """
     logger.info(
         "Surgical | Starting claim-level correction (%d verdicts)…",
         len(claim_verdicts),
@@ -256,14 +144,34 @@ def surgical_correct(
             continue
 
         if v_verdict == "UNVERIFIABLE":
-            # Remove unverifiable claims — don't replace with guesses
+            # NLI often marks implicit contradictions as UNVERIFIABLE
+            # (e.g., claim names person X for a role, RAG names person Y —
+            # high P(neutral) because RAG doesn't say "X is NOT the role").
+            # Try a RAG-grounded replacement first; _generate_replacement
+            # returns "" when evidence genuinely lacks the answer, in which
+            # case we fall back to removal.
+            replacement = _generate_replacement(
+                v_claim,
+                v_evidence or rag_output[:3000],
+                query,
+            )
+            if replacement:
+                corrected = corrected.replace(matched_text, replacement, 1)
+                corrections_made += 1
+                logger.info(
+                    "Surgical | Replaced UNVERIFIABLE claim with RAG-grounded fact:\n"
+                    "  OLD: '%s'\n  NEW: '%s'",
+                    v_claim[:80], replacement[:80],
+                )
+                continue
+
+            # No supporting evidence — remove the claim
             corrected = corrected.replace(matched_text, "", 1)
-            # Clean up double spaces/newlines
             corrected = re.sub(r"\n\s*\n\s*\n", "\n\n", corrected)
             corrected = re.sub(r"  +", " ", corrected)
             corrections_made += 1
             logger.info(
-                "Surgical | Removed UNVERIFIABLE claim: '%s'",
+                "Surgical | Removed UNVERIFIABLE claim (no RAG support): '%s'",
                 v_claim[:60],
             )
             continue
@@ -330,22 +238,6 @@ def surgical_correct_single(
     wrong_claim: str,
     evidence: str,
 ) -> str:
-    """
-    Replace exactly one wrong claim in an answer, preserving everything else.
-
-    Uses a single Gemini call with a focused prompt that instructs the model
-    to return the full answer with only the specified claim corrected,
-    grounded in the provided evidence.
-
-    Args:
-        original_answer: The full LLM-generated answer text.
-        wrong_claim:     The specific claim within the answer that is wrong.
-        evidence:        Factual evidence to ground the correction in.
-
-    Returns:
-        The full answer string with only that one claim corrected.
-        Returns the original answer unchanged if the correction fails.
-    """
     if not original_answer or not wrong_claim:
         return original_answer or ""
 
@@ -355,28 +247,28 @@ def surgical_correct_single(
         evidence=evidence[:4000] if evidence else "(no evidence provided)",
     )
 
-    corrected = _gemini_generate_short(prompt)
+    corrected = _local_generate_short(prompt)
 
     # ── Validation ────────────────────────────────────────────────────
     if not corrected or len(corrected.strip()) < 10:
         logger.warning("Surgical | Single-claim correction returned empty, keeping original.")
         return original_answer
 
-    # Strip markdown fences if Gemini wrapped the output
+    # Strip markdown fences if the LLM wrapped the output
     if corrected.startswith("```") and corrected.endswith("```"):
         corrected = re.sub(r"^```\w*\n?", "", corrected)
         corrected = re.sub(r"\n?```$", "", corrected)
         corrected = corrected.strip()
 
     # Sanity check: the corrected answer should still contain most of
-    # the original content (Gemini shouldn't have rewritten everything)
+    # the original content (LLM shouldn't have rewritten everything)
     original_words = set(original_answer.lower().split())
     corrected_words = set(corrected.lower().split())
     if original_words:
         preservation = len(original_words & corrected_words) / len(original_words)
         if preservation < 0.5:
             logger.warning(
-                "Surgical | Gemini rewrote too much (%.0f%% words preserved), "
+                "Surgical | LLM rewrote too much (%.0f%% words preserved), "
                 "keeping original.",
                 preservation * 100,
             )

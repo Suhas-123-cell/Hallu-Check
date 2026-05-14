@@ -1,22 +1,3 @@
-"""
-hallu-check | benchmarks/eval_e2e.py
-End-to-End Pipeline Benchmark Runner
-
-Runs the FULL Hallu-Check pipeline on standard datasets and measures:
-  1. Before: How truthful is the RAW Llama output?
-  2. After:  How truthful is the PIPELINE-CORRECTED output?
-  3. Improvement: Δ between before and after (the paper's key metric)
-
-Datasets supported:
-  - TruthfulQA (factual)
-  - HaluEval-QA (factual)
-  - HumanEval (code, optional)
-  - GSM8K (math, optional)
-
-Usage:
-    python -m benchmarks.eval_e2e --dataset truthfulqa --samples 100
-    python -m benchmarks.eval_e2e --dataset all --samples 50
-"""
 from __future__ import annotations
 
 import argparse
@@ -38,7 +19,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def _load_nli():
-    """Ensure NLI model is loaded."""
     from nodes.nli_model import load_model, is_loaded  # type: ignore
     if not is_loaded():
         load_model()
@@ -49,18 +29,6 @@ def evaluate_truthfulqa_e2e(
     max_samples: int = 100,
     enable_icr: bool = True,
 ) -> Dict:
-    """
-    End-to-end TruthfulQA evaluation.
-
-    For each question:
-      1. Llama generates an answer (raw output)
-      2. Full pipeline verifies and refines
-      3. Score BOTH the raw and refined answers against TruthfulQA ground truth
-
-    Scoring: For each answer, check NLI entailment between:
-      - answer vs. best_answer (should be SUPPORTED = truthful)
-      - answer vs. incorrect_answers (should NOT be SUPPORTED = caught)
-    """
     from datasets import load_dataset  # type: ignore
     from nodes.nli_model import classify_nli  # type: ignore
     from nodes.generator import generate_llm_output  # type: ignore
@@ -207,14 +175,6 @@ def evaluate_halueval_e2e(
     max_samples: int = 100,
     enable_icr: bool = True,
 ) -> Dict:
-    """
-    End-to-end HaluEval-QA evaluation.
-
-    For each sample:
-      1. Get the QA context + question + hallucinated/non-hallucinated answer
-      2. Run the pipeline's claim verification
-      3. Measure if it correctly identifies hallucinated answers
-    """
     from datasets import load_dataset  # type: ignore
     from nodes.claim_verifier import verify_claims  # type: ignore
 

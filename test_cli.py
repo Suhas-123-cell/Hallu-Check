@@ -1,6 +1,7 @@
 
 import os
 import sys
+from typing import Optional
 import time
 
 try:
@@ -12,7 +13,7 @@ except ImportError:
 
 API_URL = "http://127.0.0.1:8000/generate"
 
-# ── Verdict display config ───────────────────────────────────────────────────
+# ── Verdict display config 
 VERDICT_ICONS = {
     "SUPPORTED":          "+",
     "CONTRADICTED":       "x",
@@ -34,20 +35,17 @@ DIM = "\033[2m"
 
 
 def _truncate(text: str, max_len: int = 120) -> str:
-    """Truncate text with ellipsis if too long."""
     text = text.replace("\n", " ").strip()
     return text[:max_len] + "…" if len(text) > max_len else text
 
 
 def print_header():
-    print(f"\n{BOLD}{'=' * 64}")
     print("  hallu-correct v3.0 - claim-level hallucination detection")
     
     print(f"  {DIM}type 'exit' or 'quit' to stop.{RESET}\n")
 
 
 def print_claim_verdicts(verdicts: list):
-    """Display per-claim verdicts with icons and evidence."""
     if not verdicts:
         print(f"\n  {DIM}no factual claims detected.{RESET}")
         return
@@ -74,7 +72,6 @@ def print_claim_verdicts(verdicts: list):
 
 
 def print_hallucination_score(score: float, detected: bool):
-    """Display the hallucination score as a visual bar."""
     bar_len = 30
     filled = int(score * bar_len)
     empty = bar_len - filled
@@ -93,7 +90,7 @@ def print_hallucination_score(score: float, detected: bool):
     print(f"     status: {status}")
 
 
-def _read_query_interactive() -> str | None:
+def _read_query_interactive() -> Optional[str]:
     
     print(f"\n  {BOLD}enter your query (type or paste, then press ctrl+d to submit):{RESET}")
     try:
@@ -146,7 +143,6 @@ def main():
 
 
 def _process_query(query: str) -> None:
-    """Send query to the pipeline API and display results."""
     print(f"\n  processing pipeline (this may take 10-60 seconds)...")
     start_time = time.time()
     response = None

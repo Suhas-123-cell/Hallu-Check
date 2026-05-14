@@ -1,18 +1,3 @@
-"""
-hallu-check | nodes/claim_classifier.py
-Claim-Level Type Classifier
-
-Classifies an individual atomic claim into one of three types so the
-correct verification pathway is used:
-
-  • factual  →  NLI-based verification against RAG evidence
-  • math     →  Symbolic / numeric execution verification
-  • code     →  Sandbox execution verification (EGV)
-
-Two-stage approach (mirrors gatekeeper.py's pattern):
-  Stage 1:  Fast heuristic (regex + keyword matching) — ~0 ms, no API cost.
-  Stage 2:  One-shot Gemini call — only fired when heuristics are ambiguous.
-"""
 from __future__ import annotations
 
 import logging
@@ -23,55 +8,49 @@ logger = logging.getLogger("hallu-check.claim_classifier")
 
 ClaimType = Literal["factual", "math", "code"]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Stage 1 — Heuristic patterns
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ── Code indicators ──────────────────────────────────────────────────────────
-# Patterns that, if present in a claim, almost certainly make it a code claim.
 _CODE_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"\bdef\s+\w+\s*\("),              # Python function def
-    re.compile(r"\breturn\s+\w"),                  # return statement
-    re.compile(r"\bclass\s+\w+\s*[(:{]"),          # class definition
-    re.compile(r"\bimport\s+\w+"),                 # import statement
-    re.compile(r"\bfrom\s+\w+\s+import\b"),        # from … import
-    re.compile(r"\bfor\s+\w+\s+in\b"),             # Python for-in loop
-    re.compile(r"\bfor\s*\(.+;.+;"),               # C-style for loop
-    re.compile(r"\bwhile\s*\(.+\)\s*\{"),          # C/Java while loop
-    re.compile(r"\bif\s*\(.+\)\s*\{"),             # C/Java if block
-    re.compile(r"```\w*\n"),                       # Markdown code fence
-    re.compile(r"`[^`]+`"),                        # Inline code (backtick)
-    re.compile(r"#include\s*<"),                   # C/C++ include
-    re.compile(r"\bvoid\s+\w+\s*\("),              # C/Java void function
-    re.compile(r"\bint\s+\w+\s*\("),               # C/Java int function
-    re.compile(r"\bfunction\s+\w+\s*\("),          # JS function
-    re.compile(r"\bconst\s+\w+\s*=\s*\("),         # JS arrow function
-    re.compile(r"=>"),                             # Arrow operator
-    re.compile(r"\bprint\s*\("),                   # print call
-    re.compile(r"\bself\.\w+"),                    # Python self reference
-    re.compile(r"\bnew\s+\w+\s*\("),               # new Object()
-    re.compile(r"\b[a-z]+_[a-z]+\("),              # snake_case function call
-    re.compile(r"\b\w+\.append\("),                # .append() method call
-    re.compile(r"\b\w+\.sort\("),                  # .sort() method call
-    re.compile(r"\b\w+\.pop\("),                   # .pop() method call
-    re.compile(r"\b\w+\.keys\("),                  # .keys() method call
-    re.compile(r"\blen\s*\("),                     # len() call
-    re.compile(r"\brange\s*\("),                   # range() call
-    re.compile(r"\b(?:True|False|None)\b"),         # Python literals
-    re.compile(r"\braise\s+\w+"),                  # raise Exception
-    re.compile(r"\btry\s*:"),                      # try block
-    re.compile(r"\bexcept\s+\w+"),                 # except clause
-    re.compile(r"\bassert\s+\w"),                  # assert statement
-    re.compile(r"\blambda\s+\w"),                  # lambda expression
-    re.compile(r"\[\s*\w+\s+for\s+\w+\s+in"),      # list comprehension
-    re.compile(r"\bdict\s*\("),                    # dict() call
-    re.compile(r"\blist\s*\("),                    # list() call
-    re.compile(r"\bset\s*\("),                     # set() call
-    re.compile(r"\btuple\s*\("),                   # tuple() call
-    re.compile(r"\b\w+\[\d+\]"),                   # array indexing: arr[0]
-    re.compile(r"\b\w+\[\s*:\s*\]"),                # slice: arr[:]
-    re.compile(r"\bTypeError\b|\bValueError\b|\bIndexError\b"),  # exception types
-    re.compile(r"\b(?:str|int|float|bool)\s*\("),  # type casting
+    re.compile(r"\bdef\s+\w+\s*\("),              
+    re.compile(r"\breturn\s+\w"),                  
+    re.compile(r"\bclass\s+\w+\s*[(:{]"),          
+    re.compile(r"\bimport\s+\w+"),                 
+    re.compile(r"\bfrom\s+\w+\s+import\b"),        
+    re.compile(r"\bfor\s+\w+\s+in\b"),             
+    re.compile(r"\bfor\s*\(.+;.+;"),               
+    re.compile(r"\bwhile\s*\(.+\)\s*\{"),           
+    re.compile(r"\bif\s*\(.+\)\s*\{"),             
+    re.compile(r"```\w*\n"),                       
+    re.compile(r"`[^`]+`"),                        
+    re.compile(r"#include\s*<"),                   
+    re.compile(r"\bvoid\s+\w+\s*\("),              
+    re.compile(r"\bint\s+\w+\s*\("),               
+    re.compile(r"\bfunction\s+\w+\s*\("),          
+    re.compile(r"\bconst\s+\w+\s*=\s*\("),         
+    re.compile(r"=>"),                             
+    re.compile(r"\bprint\s*\("),                   
+    re.compile(r"\bself\.\w+"),                    
+    re.compile(r"\bnew\s+\w+\s*\("),               
+    re.compile(r"\b[a-z]+_[a-z]+\("),              
+    re.compile(r"\b\w+\.append\("),                
+    re.compile(r"\b\w+\.sort\("),                  
+    re.compile(r"\b\w+\.pop\("),                   
+    re.compile(r"\b\w+\.keys\("),                  
+    re.compile(r"\blen\s*\("),                     
+    re.compile(r"\brange\s*\("),                   
+    re.compile(r"\b(?:True|False|None)\b"),         
+    re.compile(r"\braise\s+\w+"),                  
+    re.compile(r"\btry\s*:"),                      
+    re.compile(r"\bexcept\s+\w+"),                 
+    re.compile(r"\bassert\s+\w"),                  
+    re.compile(r"\blambda\s+\w"),                  
+    re.compile(r"\[\s*\w+\s+for\s+\w+\s+in"),      
+    re.compile(r"\bdict\s*\("),                    
+    re.compile(r"\blist\s*\("),                    
+    re.compile(r"\bset\s*\("),                     
+    re.compile(r"\btuple\s*\("),                   
+    re.compile(r"\b\w+\[\d+\]"),                   
+    re.compile(r"\b\w+\[\s*:\s*\]"),                
+    re.compile(r"\bTypeError\b|\bValueError\b|\bIndexError\b"),  
+    re.compile(r"\b(?:str|int|float|bool)\s*\("),  
 ]
 
 _CODE_KEYWORDS: list[str] = [
@@ -138,21 +117,12 @@ _MATH_KEYWORDS: list[str] = [
 ]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Stage 1 entry point
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 def _heuristic_classify(claim: str) -> ClaimType | None:
-    """
-    Fast, zero-cost heuristic classification of a single claim.
-
-    Returns the label if confident, or ``None`` to fall through to Gemini.
-    """
     claim_lower = claim.lower()
 
-    # ── Historical/biographical override (always factual) ─────────────
-    # These phrases describe origins/people/events and should never be
-    # routed to code verification even if other code-like tokens exist.
+ 
     factual_override_phrases = (
         "was invented",
         "was created",
@@ -165,7 +135,7 @@ def _heuristic_classify(claim: str) -> ClaimType | None:
         logger.debug("claim_classifier | heuristic → factual (historical override)")
         return "factual"
 
-    # ── Code check (highest priority — code often embeds math) ────────
+   
     for pat in _CODE_PATTERNS:
         if pat.search(claim):
             logger.debug("claim_classifier | heuristic → code (pattern: %s)", pat.pattern[:30])
@@ -176,7 +146,6 @@ def _heuristic_classify(claim: str) -> ClaimType | None:
         logger.debug("claim_classifier | heuristic → code (%d keyword hits)", code_hits)
         return "code"
 
-    # ── Math check ────────────────────────────────────────────────────
     for pat in _MATH_PATTERNS:
         if pat.search(claim):
             logger.debug("claim_classifier | heuristic → math (pattern: %s)", pat.pattern[:30])
@@ -190,20 +159,17 @@ def _heuristic_classify(claim: str) -> ClaimType | None:
         logger.debug("claim_classifier | heuristic → math (%d keyword hits)", math_hits)
         return "math"
 
-    # ── Single-keyword tiebreaker (weaker signal, but still useful) ───
+   
     if code_hits == 1 and math_hits == 0:
         return "code"
     if math_hits == 1 and code_hits == 0:
         return "math"
 
-    # ── Factual shortcut: if the claim looks like a plain factual
-    #    statement with no code/math signal at all, skip the LLM call.
-    #    Heuristic: contains a proper noun (capitalized word not at start)
-    #    or a date/number used in a factual context.
+    
     _factual_indicators = [
         re.search(r"\b(?:is|was|are|were|has|had|born|founded|located)\b", claim_lower),
-        re.search(r"\b\d{4}\b", claim),          # year-like number
-        re.search(r"(?<=\s)[A-Z][a-z]{2,}", claim),  # proper noun (mid-sentence cap)
+        re.search(r"\b\d{4}\b", claim),          
+        re.search(r"(?<=\s)[A-Z][a-z]{2,}", claim),  
     ]
     if any(_factual_indicators):
         logger.debug("claim_classifier | heuristic → factual (factual indicator)")
@@ -213,12 +179,11 @@ def _heuristic_classify(claim: str) -> ClaimType | None:
     return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Stage 2 — Gemini fallback (one-shot, ~0.3 s)
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 _GEMINI_PROMPT = """\
 Classify the following atomic claim into exactly one category.
+Respond with EXACTLY ONE WORD: factual, math, or code. Do not include any other text.
 
 Categories:
 - **factual**: A real-world factual statement about people, places, events, dates, \
@@ -238,17 +203,11 @@ Label:"""
 
 
 def _gemini_classify(claim: str) -> ClaimType:
-    """
-    Stage 2: Classify via a single LLM call (local Ollama, or Gemini fallback).
-
-    Uses the local LLM module for zero-cost classification.
-    Falls back to Gemini if Ollama is unavailable.
-    """
     prompt = _GEMINI_PROMPT.format(claim=claim.replace('"', '\\"'))
 
     raw = ""
 
-    # ── Primary: Local LLM via Ollama ────────────────────────────────────
+
     try:
         from nodes.local_llm import chat_completion, is_available  # type: ignore[import-not-found]
         if is_available():
@@ -260,49 +219,25 @@ def _gemini_classify(claim: str) -> ClaimType:
     except Exception as e:
         logger.warning("claim_classifier | Local LLM failed: %s", str(e)[:100])
 
-    # ── Fallback: Gemini ─────────────────────────────────────────────────
-    if not raw:
-        try:
-            from nodes.claim_verifier import _gemini_generate  # type: ignore[import-not-found]
-            raw = _gemini_generate(prompt).strip().lower()
-        except Exception:
-            pass
+    # (No Gemini fallback — API reserved for refiner only)
 
     if not raw:
         logger.warning("claim_classifier | All LLMs failed, defaulting to 'factual'.")
         return "factual"
 
-    # Parse — accept the first valid label found in the response
+    
     for label in ("code", "math", "factual"):
         if label in raw:
             logger.info("claim_classifier | LLM → %s (raw=%r)", label, raw[:40])
             return label  # type: ignore[return-value]
 
-    # If LLM returned garbage, default to factual (safest path — triggers NLI)
+ 
     logger.warning("claim_classifier | LLM returned unparseable %r, defaulting to 'factual'.", raw[:60])
     return "factual"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Public API
-# ─────────────────────────────────────────────────────────────────────────────
 
 def classify_claim(claim: str) -> ClaimType:
-    """
-    Classify a single atomic claim into ``"factual"``, ``"math"``, or ``"code"``.
-
-    Uses a two-stage approach:
-      1. **Heuristic** — regex + keyword matching (~0 ms, zero API cost).
-         Covers the vast majority of claims.
-      2. **Gemini fallback** — one-shot prompt, only when heuristics are
-         ambiguous.  Re-uses the rate-limit-aware helper from claim_verifier.
-
-    Args:
-        claim: A single atomic claim string (as returned by the claim extractor).
-
-    Returns:
-        One of ``"factual"``, ``"math"``, ``"code"``.
-    """
     if not claim or not claim.strip():
         return "factual"
 

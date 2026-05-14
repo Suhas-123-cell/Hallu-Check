@@ -1,23 +1,3 @@
-"""
-hallu-check | train_nli.py
-Fine-tune DeBERTa-v3-base on Multi-Genre NLI (MNLI) for 3-class
-Natural Language Inference.
-
-Labels:
-  0 = entailment   → maps to SUPPORTED
-  1 = neutral       → maps to UNVERIFIABLE
-  2 = contradiction → maps to CONTRADICTED
-
-Usage:
-  # Local (with downloaded parquets):
-  python train_nli.py
-
-  # Google Colab (auto-downloads MNLI from HuggingFace):
-  !python train_nli.py --batch-size 16 --gradient-accumulation-steps 2
-
-Trained model is saved to models/nli-deberta-v3-mnli/
-Auto-downloads MNLI from HuggingFace if local parquets are not found.
-"""
 from __future__ import annotations
 
 import argparse
@@ -50,14 +30,6 @@ from transformers import (  # type: ignore[import-untyped]
 
 
 class NaNSkipTrainer(Trainer):
-    """
-    MPS's disentangled-attention kernel produces NaN gradients on ~3% of
-    batches with heavy padding variance.  Instead of aborting training,
-    we zero the gradients for that micro-batch (effectively skipping the
-    optimizer update for it) and continue.  Losing a few updates is far
-    cheaper than restarting a 6-hour run.
-    """
-
     _nan_skip_count = 0
 
     def training_step(self, model, inputs, num_items_in_batch=None):
@@ -101,8 +73,6 @@ logger = logging.getLogger("train_nli")
 # gamma/beta tensors, leaving ~50 LayerNorm layers at defaults (1/0).
 # This function reloads the raw checkpoint and injects those values.
 def _fix_deberta_layernorm_keys(model, model_name_or_path: str) -> None:
-    """Reload pretrained LayerNorm weights dropped by from_pretrained()."""
-
     # ── 1. Load the raw checkpoint tensors ────────────────────────────
     raw: dict | None = None
 
@@ -243,7 +213,6 @@ DEFAULT_VAL_MISMATCHED = os.path.expanduser(
 # 1. Data loading & preprocessing
 # ─────────────────────────────────────────────────────────────────────────────
 def load_mnli_parquet(path: str) -> Dataset:
-    """Load a single MNLI parquet file into a HuggingFace Dataset."""
     import pandas as pd  # type: ignore[import-untyped]
 
     df = pd.read_parquet(path)
@@ -279,13 +248,6 @@ def load_mnli_parquet(path: str) -> Dataset:
 
 
 def load_mnli_from_hub() -> tuple:
-    """
-    Download MNLI directly from HuggingFace Hub.
-    Works on Colab without uploading any files.
-
-    Returns:
-        (train_ds, val_matched_ds, val_mismatched_ds)
-    """
     from datasets import load_dataset  # type: ignore
 
     logger.info("Downloading MNLI from HuggingFace Hub (this may take a minute)...")
@@ -306,7 +268,6 @@ def load_mnli_from_hub() -> tuple:
 
 
 def tokenize_function(examples, tokenizer, max_length: int = 256):
-    """Tokenize premise-hypothesis pairs for NLI."""
     return tokenizer(
         examples["premise"],
         examples["hypothesis"],
@@ -320,7 +281,6 @@ def tokenize_function(examples, tokenizer, max_length: int = 256):
 # 2. Metrics
 # ─────────────────────────────────────────────────────────────────────────────
 def compute_metrics(eval_pred):
-    """Compute accuracy + per-class metrics for the Trainer."""
     logits, labels = eval_pred
     predictions = np.argmax(logits, axis=-1)
     acc = accuracy_score(labels, predictions)
@@ -331,8 +291,6 @@ def compute_metrics(eval_pred):
 # 3. Training
 # ─────────────────────────────────────────────────────────────────────────────
 def train(args: argparse.Namespace) -> None:
-    """Fine-tune DeBERTa-v3-base on MNLI."""
-
     # ── Device selection ─────────────────────────────────────────────
     use_bf16 = False
     use_fp16 = False

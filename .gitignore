@@ -29,7 +29,12 @@ Thumbs.db
 # ── Temp files ───────────────────────────────
 /tmp/
 *.log
-logs/*.json
+logs/
+
+# ── Benchmark artifacts ─────────────────────
+benchmarks/*.json
+benchmarks/*.csv
+benchmarks/llama_cache.json
 
 # ── Gemini / Antigravity ─────────────────────
 .gemini/

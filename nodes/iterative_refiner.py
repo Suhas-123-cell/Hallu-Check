@@ -1,29 +1,3 @@
-"""
-hallu-check | nodes/iterative_refiner.py
-Contribution 1 — Iterative Convergent Refinement (ICR)
-
-The single-pass verify→refine approach fails when the refiner itself
-halluccinates (BPE→BERT failure). ICR runs multiple rounds:
-
-  Round 0: Generate → Verify → score₀
-  Round 1: Refine (surgical) → Re-verify → score₁
-  Round 2: Refine (surgical) → Re-verify → score₂
-  ...until convergence or max rounds.
-
-Convergence criterion:
-  |scoreₙ - scoreₙ₋₁| < ε (default ε = 0.05)
-
-Divergence safeguard:
-  if scoreₙ > scoreₙ₋₁ → rollback to best-scoring round
-
-This is the paper's primary novel contribution:
-  - Nobody has demonstrated NLI-based convergence detection
-    for iterative hallucination correction
-  - The divergence safeguard prevents the "flawed reasoning"
-    amplification problem identified in Self-Refine literature
-  - Specifically designed for small models where BOTH the
-    generator AND refiner hallucinate
-"""
 from __future__ import annotations
 
 import logging
@@ -43,7 +17,6 @@ logger = logging.getLogger("hallu-check.iterative_refiner")
 
 @dataclass
 class RoundResult:
-    """Telemetry for a single refinement round."""
     round_num: int
     hallucination_score: float
     hallucination_detected: bool
@@ -58,7 +31,6 @@ class RoundResult:
 
 @dataclass
 class IterativeResult:
-    """Full result of the iterative refinement process."""
     final_answer: str
     rounds: List[RoundResult] = field(default_factory=list)
     converged: bool = False
@@ -95,30 +67,6 @@ def iterative_refine(
     max_rounds: int = ICR_MAX_ROUNDS,
     epsilon: float = ICR_CONVERGENCE_EPSILON,
 ) -> IterativeResult:
-    """
-    Contribution 1 — Multi-round verify→refine loop with NLI convergence.
-
-    Algorithm:
-      1. Start with the initial HallucinationReport (from the first verify pass)
-      2. If hallucination detected, apply surgical correction
-      3. Re-verify the corrected text
-      4. Check convergence: |Δscore| < ε → stop
-      5. Check divergence: score increased → rollback to best round → stop
-      6. Repeat until converged, diverged, or max_rounds reached
-
-    Args:
-        query:          The user's original question.
-        llm_output:     The raw LLM answer (Round 0 input).
-        rag_output:     The RAG-retrieved evidence context.
-        initial_report: The HallucinationReport from the first verify_claims() call.
-        route:          "FACTUAL" or "REASONING".
-        max_rounds:     Maximum refinement iterations (default 3).
-        epsilon:        Convergence threshold (default 0.05).
-
-    Returns:
-        IterativeResult with the best answer, round-by-round telemetry,
-        and convergence/divergence status.
-    """
     total_start = time.time()
 
     # ── Extract initial state from the first verification report ──────
@@ -192,7 +140,12 @@ def iterative_refine(
         logger.info("ICR | ── Round %d ──", round_num)
 
         # ── Step 1: Apply correction ─────────────────────────────────
-        if ENABLE_SURGICAL_CORRECTION:
+        # For FACTUAL queries, skip surgical correction (local LLM is too
+        # weak to produce grounded factual replacements) and go straight
+        # to the Gemini one-shot refiner which can synthesize from RAG.
+        use_surgical = ENABLE_SURGICAL_CORRECTION and route != "FACTUAL"
+
+        if use_surgical:
             try:
                 from nodes.surgical_corrector import surgical_correct  # type: ignore[import-not-found]
                 corrected = surgical_correct(
@@ -206,7 +159,16 @@ def iterative_refine(
                 logger.warning("ICR | Surgical correction failed (%s), trying one-shot.", e)
                 corrected = _one_shot_refine(query, rag_output, current_verdicts, route)
                 method = "one-shot"
+
+            # If surgical correction produced no change, fall through to
+            # the Gemini-powered one-shot refiner as a stronger corrector.
+            if not corrected or corrected == current_text:
+                logger.info("ICR | Surgical correction unchanged — trying one-shot refine…")
+                corrected = _one_shot_refine(query, rag_output, current_verdicts, route)
+                method = "one-shot"
         else:
+            if route == "FACTUAL":
+                logger.info("ICR | FACTUAL route — using Gemini one-shot refiner directly.")
             corrected = _one_shot_refine(query, rag_output, current_verdicts, route)
             method = "one-shot"
 
@@ -261,9 +223,41 @@ def iterative_refine(
         delta = abs(new_score - prev_score)
 
         if delta < epsilon:
+            # Surgical correction stalled. If score is still bad,
+            # try the Gemini one-shot refiner before giving up.
+            if best_score >= HALLUCINATION_THRESHOLD:
+                logger.info(
+                    "ICR | Surgical stalled (|Δ|=%.4f < ε) but score still %.4f "
+                    "— trying one-shot refine…",
+                    delta, best_score,
+                )
+                oneshot = _one_shot_refine(query, rag_output, current_verdicts, route)
+                if oneshot and oneshot != best_answer:
+                    # Re-verify the one-shot result
+                    try:
+                        from nodes.claim_verifier import verify_claims  # type: ignore[import-not-found]
+                        os_report = verify_claims(
+                            llm_output=oneshot,
+                            rag_output=rag_output,
+                            query=query,
+                        )
+                        os_score = os_report.hallucination_score
+                        logger.info(
+                            "ICR | One-shot refine score: %.4f (was %.4f)",
+                            os_score, best_score,
+                        )
+                        if os_score < best_score:
+                            best_answer = oneshot
+                            best_score = os_score
+                            best_round = round_num
+                    except Exception as e:
+                        logger.warning("ICR | One-shot re-verify failed: %s", e)
+                        # Still use the one-shot answer if surgical was worse
+                        best_answer = oneshot
+
             logger.info(
-                "ICR | Converged at round %d (|Δ|=%.4f < ε=%.3f).",
-                round_num, delta, epsilon,
+                "ICR | Converged at round %d (|Δ|=%.4f < ε=%.3f, final=%.4f).",
+                round_num, delta, epsilon, best_score,
             )
             return IterativeResult(
                 final_answer=best_answer,
@@ -340,7 +334,6 @@ def _one_shot_refine(
     claim_verdicts: list,
     route: str,
 ) -> str:
-    """Fallback to the existing one-shot refiner if surgical correction is disabled."""
     try:
         from nodes.refiner import refine_with_evidence  # type: ignore[import-not-found]
         claim_report = {

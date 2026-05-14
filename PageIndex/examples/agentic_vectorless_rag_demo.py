@@ -1,23 +1,3 @@
-"""
-Agentic Vectorless RAG with PageIndex - Demo
-
-A simple example of building a document QA agent with self-hosted PageIndex
-and the OpenAI Agents SDK. Instead of vector similarity search and chunking,
-PageIndex builds a hierarchical tree index and uses agentic LLM reasoning for
-human-like, context-aware retrieval.
-
-Agent tools:
-  - get_document()           — document metadata (status, page count, etc.)
-  - get_document_structure() — tree structure index of a document
-  - get_page_content()       — retrieve text content of specific pages
-
-Steps:
-  1 — Index a PDF and view its tree structure index
-  2 — View document metadata
-  3 — Ask a question (agent reasons over the index and auto-calls tools)
-
-Requirements: pip install openai-agents
-"""
 import sys
 import json
 import asyncio
@@ -53,29 +33,16 @@ Answer based only on tool output. Be concise.
 
 
 def query_agent(client: PageIndexClient, doc_id: str, prompt: str, verbose: bool = False) -> str:
-    """Run a document QA agent using the OpenAI Agents SDK.
-
-    Streams text output token-by-token and returns the full answer string.
-    Tool calls are always printed; verbose=True also prints arguments and output previews.
-    """
-
     @function_tool
     def get_document() -> str:
-        """Get document metadata: status, page count, name, and description."""
         return client.get_document(doc_id)
 
     @function_tool
     def get_document_structure() -> str:
-        """Get the document's full tree structure (without text) to find relevant sections."""
         return client.get_document_structure(doc_id)
 
     @function_tool
     def get_page_content(pages: str) -> str:
-        """
-        Get the text content of specific pages or line numbers.
-        Use tight ranges: e.g. '5-7' for pages 5 to 7, '3,8' for pages 3 and 8, '12' for page 12.
-        For Markdown documents, use line numbers from the structure's line_num field.
-        """
         return client.get_page_content(doc_id, pages)
 
     agent = Agent(
