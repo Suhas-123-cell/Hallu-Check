@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import logging
 import subprocess
 import sys
@@ -7,6 +8,27 @@ import tempfile
 from dataclasses import dataclass
 
 logger = logging.getLogger("hallu-check.python_exec")
+
+_UNSAFE_IMPORTS = {
+    "os", "subprocess", "sys", "socket", "shutil", "pathlib", "ctypes",
+    "importlib", "builtins", "signal", "multiprocessing", "threading",
+    "asyncio", "urllib", "http", "ftplib", "smtplib", "telnetlib",
+    "xmlrpc", "pickle", "shelve", "dbm", "pty", "fcntl", "resource",
+}
+_UNSAFE_BUILTINS = {"eval", "exec", "compile", "__import__", "open", "input", "breakpoint"}
+
+
+def _check_code_safety(code: str) -> None:
+    tree = ast.parse(code)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            module = node.names[0].name if isinstance(node, ast.Import) else (node.module or "")
+            root = module.split(".")[0]
+            if root in _UNSAFE_IMPORTS:
+                raise ValueError(f"Unsafe import: {module}")
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id in _UNSAFE_BUILTINS:
+                raise ValueError(f"Unsafe call: {node.func.id}")
 
 _DEFAULT_TIMEOUT = 5
 _MAX_OUTPUT_CHARS = 4000
@@ -41,6 +63,11 @@ class ExecResult:
 def run_python(code: str, timeout: int = _DEFAULT_TIMEOUT) -> ExecResult:
     if not code or not code.strip():
         return ExecResult(ok=False, stdout="", stderr="", error="empty code")
+
+    try:
+        _check_code_safety(code)
+    except (ValueError, SyntaxError) as e:
+        return ExecResult(ok=False, stdout="", stderr="", error=str(e))
 
     full_script = _PREAMBLE + "\n# --- model code below ---\n" + code
 

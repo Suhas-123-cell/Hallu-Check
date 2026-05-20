@@ -10,7 +10,7 @@ from typing import List, Tuple
 from urllib.parse import urljoin, urlparse
 
 import httpx  # type: ignore[import-untyped]
-from bs4 import BeautifulSoup  # type: ignore[import-untyped]
+from bs4 import BeautifulSoup, Tag  # type: ignore[import-untyped]
 from tenacity import retry, stop_after_attempt, wait_exponential  # type: ignore
 from config import (  # type: ignore
     SEARCH_MAX_RESULTS,
@@ -299,11 +299,6 @@ def _expand_abbreviations(words: List[str], query: str) -> List[str]:
     return expanded
 
 
-@retry(
-    stop=stop_after_attempt(2),
-    wait=wait_exponential(min=1, max=5),
-    reraise=True,
-)
 def _strip_filler_words(words: List[str]) -> List[str]:
     filler = {
         "who", "what", "where", "when", "why", "how", "is", "are", "was",
@@ -346,11 +341,8 @@ def extract_keywords(query: str) -> List[str]:
     try:
         import concurrent.futures
 
-        def call_llm() -> str:
-            return _hf_extract_keywords(prompt)
-
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(call_llm)
+            future = executor.submit(_hf_extract_keywords, prompt)
             try:
                 raw = future.result(timeout=15)
             except concurrent.futures.TimeoutError:
@@ -607,17 +599,88 @@ def _extract_clean_text(html_text: str, max_chars: int = 8000) -> str:
     soup = BeautifulSoup(html_text or "", "lxml")
 
     # Remove boilerplate tags
-    for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form"]):
+    for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form",
+                      "iframe", "noscript", "svg"]):
         tag.decompose()
 
-    # Prefer <article> or <main>; fall back to <body>
-    main = soup.find("article") or soup.find("main") or soup.body
+    # Remove common navigation / sidebar / cookie-banner elements by class/id
+    _NAV_SELECTORS = [
+        "[class*='nav']", "[class*='menu']", "[class*='sidebar']",
+        "[class*='cookie']", "[class*='banner']", "[class*='popup']",
+        "[class*='modal']", "[class*='breadcrumb']", "[class*='share']",
+        "[class*='social']", "[class*='related']", "[class*='comment']",
+        "[class*='footer']", "[class*='header']", "[class*='topbar']",
+        "[id*='nav']", "[id*='menu']", "[id*='sidebar']",
+        "[id*='cookie']", "[id*='banner']",
+        "ul.nav", "div.nav", "ol.breadcrumb",
+    ]
+    for selector in _NAV_SELECTORS:
+        try:
+            for el in soup.select(selector):
+                el.decompose()
+        except Exception:
+            pass
+
+    # Try to find the main content area — prefer specific selectors
+    # over the generic <body> fallback
+    _CONTENT_SELECTORS = [
+        "article",
+        "main",
+        "[class*='article-body']",
+        "[class*='article_body']",
+        "[class*='article-content']",
+        "[class*='entry-content']",
+        "[class*='post-content']",
+        "[class*='page-content']",
+        "[class*='text--']",           # GeeksforGeeks uses text-- prefixed classes
+        "[id='content']",
+        "[id='main-content']",
+        "[id='mw-content-text']",      # Wikipedia
+        "[class*='mw-parser-output']", # Wikipedia
+        "div.content",
+        "section.content",
+    ]
+
+    main = None
+    for selector in _CONTENT_SELECTORS:
+        try:
+            found = soup.select_one(selector)
+            if found:
+                # Verify it has substantial text (not just nav remnants)
+                candidate_text = found.get_text(strip=True)
+                if len(candidate_text) > 100:
+                    main = found
+                    break
+        except Exception:
+            pass
+
+    if main is None:
+        main = soup.body
     if main is None:
         return ""
 
     text = main.get_text(separator="\n")
+
+    # Filter out short lines that are likely navigation items / boilerplate
+    lines = text.split("\n")
+    filtered_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            filtered_lines.append("")
+            continue
+        # Skip very short lines (likely nav items, button labels, etc.)
+        if len(stripped) < 15:
+            continue
+        # Skip lines that are just ">" blockquote markers or bullet chars
+        if stripped in (">", "•", "·", "–", "—", "|"):
+            continue
+        filtered_lines.append(stripped)
+
+    text = "\n".join(filtered_lines)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     return text[:max_chars] if text else ""
+
 
 
 def _fetch_html(
@@ -651,7 +714,7 @@ def _fetch_html(
             follow_redirects=True,
             timeout=request_timeout,
             headers=headers,
-            verify=False,
+            verify=True,
         ) as client:
             resp = client.get(url)
             resp.raise_for_status()
@@ -679,7 +742,7 @@ def _fetch_html(
             follow_redirects=True,
             timeout=mirror_req_timeout,
             headers=headers,
-            verify=False,
+            verify=True,
         ) as client:
             mirror_resp = client.get(fallback_url)
             mirror_resp.raise_for_status()
@@ -722,7 +785,9 @@ def extract_links(html: str, base_url: str) -> List[Tuple[str, str]]:
         soup = BeautifulSoup(html, "lxml")
         links = []
         for a_tag in soup.find_all("a", href=True):
-            href = str(a_tag.get("href", "")).strip()
+            if not isinstance(a_tag, Tag):
+                continue
+            href = str(a_tag["href"]).strip()
             if not href or href.startswith("#"):
                 continue
             # Convert relative URLs to absolute

@@ -43,16 +43,6 @@ logger = logging.getLogger("hallu-check")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Downloading NLTK punkt tokenizer…")
-
-    # ── Workaround for macOS Python SSL Certificate issues during NLTK download ──
-    import ssl
-    try:
-        _create_unverified_https_context = ssl._create_unverified_context
-    except AttributeError:
-        pass
-    else:
-        ssl._create_default_https_context = _create_unverified_https_context
-
     nltk.download("punkt", quiet=True)
     nltk.download("punkt_tab", quiet=True)
     logger.info("NLTK ready. Hallu-Check Agentic Pipeline is live.")
@@ -243,6 +233,10 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
     report_dict = hallu_report.to_dict()
     report_dict["original_output"] = reasoned_output
 
+    # Pass the specific reasoning subtype so the refiner can select
+    # the appropriate prompt (e.g., code-aware for REASONING_CODE)
+    refiner_route = reasoning_subtype  # REASONING_CODE, REASONING_MATH, or REASONING_LOGIC
+
     if hallu_report.hallucination_detected:
         logger.info("── Node 6: Hallucination detected — starting ICR…")
         if ENABLE_ICR:
@@ -253,7 +247,7 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
                     reasoned_output,
                     rag_output,
                     hallu_report,
-                    "REASONING",
+                    refiner_route,
                 )
                 if icr_result.final_answer:
                     final_answer = icr_result.final_answer
@@ -268,7 +262,7 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
                 logger.warning("── ICR failed (%s), trying one-shot refine.", icr_exc)
                 try:
                     refined = await asyncio.to_thread(
-                        refine_with_evidence, query, rag_output, report_dict, "REASONING",
+                        refine_with_evidence, query, rag_output, report_dict, refiner_route,
                     )
                     if refined:
                         final_answer = refined
@@ -278,7 +272,7 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
             # ICR disabled — use original one-shot refiner
             try:
                 refined = await asyncio.to_thread(
-                    refine_with_evidence, query, rag_output, report_dict, "REASONING",
+                    refine_with_evidence, query, rag_output, report_dict, refiner_route,
                 )
                 if refined:
                     final_answer = refined

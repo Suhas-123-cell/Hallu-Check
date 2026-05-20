@@ -6,7 +6,7 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 logging.basicConfig(
     level=logging.INFO,
@@ -88,6 +88,7 @@ def evaluate_truthfulqa_e2e(
             raw_hallucinated += 1
 
         # Step 3: Run verification pipeline
+        refined_is_truthful = raw_is_truthful  # default fallback
         try:
             hallu_report = verify_claims(
                 llm_output=raw_output,
@@ -138,7 +139,7 @@ def evaluate_truthfulqa_e2e(
         per_sample.append({
             "question": question[:100],
             "raw_truthful": raw_is_truthful,
-            "refined_truthful": refined_is_truthful if 'refined_is_truthful' in dir() else raw_is_truthful,
+            "refined_truthful": refined_is_truthful,
         })
 
         if (i + 1) % 10 == 0:

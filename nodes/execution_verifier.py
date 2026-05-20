@@ -4,7 +4,7 @@ import logging
 import re
 import textwrap
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from nodes.tools.python_exec import run_python  # type: ignore[import-not-found]
 
@@ -52,12 +52,10 @@ _FUNCTION_DEF_RE = re.compile(
 
 
 def _extract_code(llm_output: str) -> str:
-    import textwrap as _tw
-
     # Try fenced code blocks first
     blocks = _CODE_BLOCK_RE.findall(llm_output)
     if blocks:
-        return _tw.dedent(blocks[0]).strip()
+        return textwrap.dedent(blocks[0]).strip()
 
     # Try bare function definitions — capture the full function
     # including nested defs by tracking indentation
@@ -93,7 +91,7 @@ def _extract_code(llm_output: str) -> str:
         while func_lines and func_lines[-1].strip() == "":
             func_lines.pop()
         if func_lines:
-            return _tw.dedent("\n".join(func_lines)).strip()
+            return textwrap.dedent("\n".join(func_lines)).strip()
 
     # Try indented blocks (4+ spaces or tab)
     indented_lines = []
@@ -111,7 +109,7 @@ def _extract_code(llm_output: str) -> str:
             indented_lines = []
 
     if len(indented_lines) >= 3:
-        return _tw.dedent("\n".join(indented_lines)).strip()
+        return textwrap.dedent("\n".join(indented_lines)).strip()
 
     return ""
 
@@ -345,7 +343,6 @@ def _run_test(
         passed = (
             actual == expected
             or actual == repr(expected)
-            or str(actual) == str(expected)
         )
 
         return TestResult(

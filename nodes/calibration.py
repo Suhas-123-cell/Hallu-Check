@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sys
-from pathlib import Path
 from typing import Dict, Optional
 
 import numpy as np
@@ -25,14 +23,13 @@ def _load_params() -> Optional[Dict]:
     if _params is not None:
         return _params
 
-    if not os.path.exists(CALIBRATION_PATH):
-        return None
-
     try:
         with open(CALIBRATION_PATH, "r") as f:
             _params = json.load(f)
         logger.info("Loaded calibration params from %s", CALIBRATION_PATH)
         return _params
+    except FileNotFoundError:
+        return None
     except Exception as e:
         logger.warning("Failed to load calibration params: %s", e)
         return None
@@ -73,6 +70,8 @@ def train_calibration(
     val_parquet: str = os.path.expanduser("~/Downloads/validation_matched-00000-of-00001.parquet"),
     max_samples: int = 2000,
 ) -> Dict:
+    import sys
+    from pathlib import Path
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
     import pandas as pd
@@ -87,9 +86,6 @@ def train_calibration(
     df = pd.read_parquet(val_parquet)
     df = df[["premise", "hypothesis", "label"]].dropna().head(max_samples)
 
-    # Model's label mapping (may differ from MNLI standard)
-    from nodes.nli_model import _model  # type: ignore
-    model_id2label = _model.config.id2label
     # Map MNLI labels (0=ent, 1=neut, 2=contra) to model label names
     mnli_to_name = {0: "entailment", 1: "neutral", 2: "contradiction"}
 

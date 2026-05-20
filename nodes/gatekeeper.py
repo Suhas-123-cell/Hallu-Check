@@ -37,6 +37,15 @@ _CODE_PATTERNS = [
     r"\bfrom\s+\w+\s+import", # Python imports
 ]
 
+# ── Code-request intent patterns (user is ASKING FOR code, not providing it) ──
+_CODE_REQUEST_PATTERNS = [
+    r"(?:give|show|write|provide|generate|create|build|make)\s+(?:me\s+)?(?:the\s+)?(?:a\s+)?(?:python|java|c\+\+|javascript|rust|golang|code|program|script|implementation|function)",
+    r"(?:i\s+)?(?:want|need)\s+(?:the\s+)?(?:a\s+)?(?:python\s+)?(?:code|program|script|implementation|function)",
+    r"(?:code|implement|program)\s+(?:for|to|that|which)",
+    r"(?:python|java|c\+\+|javascript)\s+(?:code|program|script|implementation)\s+(?:for|to|of)",
+    r"how\s+(?:to|do\s+(?:i|you))\s+(?:code|implement|program|write)",
+]
+
 # Algorithm / competitive programming keywords
 _REASONING_KEYWORDS = [
     # Problem structure
@@ -61,6 +70,8 @@ _REASONING_KEYWORDS = [
     "logic", "logical", "reasoning", "deduce", "infer",
     "translate this", "convert this", "transform this",
     "write a regex", "parse this",
+    # Code-intent keywords (single words that strongly suggest code is wanted)
+    "code", "implementation", "script", "program",
 ]
 
 # Chitchat patterns
@@ -110,6 +121,12 @@ def _heuristic_classify(query: str) -> Dict[str, object] | None:
         logger.info("Node 0 | Heuristic → FACTUAL (keyword match)")
         return {"category": "FACTUAL", "confidence": 0.90}
 
+    # ── Check for code-request intent (user is ASKING FOR code) ───────
+    for pattern in _CODE_REQUEST_PATTERNS:
+        if re.search(pattern, query_lower):
+            logger.info("Node 0 | Heuristic → REASONING (code-request intent: %s)", pattern[:40])
+            return {"category": "REASONING", "confidence": 0.95}
+
     # ── Check for code snippets (strong signal for REASONING) ─────────
     for pattern in _CODE_PATTERNS:
         if re.search(pattern, query, re.MULTILINE):
@@ -118,7 +135,7 @@ def _heuristic_classify(query: str) -> Dict[str, object] | None:
 
     # ── Check for algorithm/coding keywords ───────────────────────────
     keyword_hits = sum(1 for kw in _REASONING_KEYWORDS if kw in query_lower)
-    if keyword_hits >= 3:
+    if keyword_hits >= 2:
         logger.info("Node 0 | Heuristic → REASONING (%d keyword hits)", keyword_hits)
         return {"category": "REASONING", "confidence": 0.90}
 

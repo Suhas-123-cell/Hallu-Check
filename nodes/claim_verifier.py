@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import json
 import logging
 import re
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from config import (  # type: ignore[import-not-found]
     HALLUCINATION_THRESHOLD,
@@ -189,39 +188,6 @@ def _rag_has_substantive_content(rag_output: str, query: str) -> bool:
 
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. Claim Extraction (Gemini) — ONLY extracts claims, no verification
-# ─────────────────────────────────────────────────────────────────────────────
-_EXTRACT_PROMPT = """\
-You are a claim extraction system. Extract every atomic factual claim from the LLM answer below.
-
-CRITICAL RULES — you MUST follow these:
-- COPY claims using the SAME words as the original text. Do NOT rephrase or paraphrase.
-- Do NOT add any information that is not EXPLICITLY stated in the LLM answer.
-- Do NOT confuse similar-sounding terms (e.g., BPE ≠ BERT, BP ≠ BPE).
-- Every claim you output MUST be directly traceable to a sentence in the LLM answer.
-- An "atomic claim" is the smallest standalone factual statement.
-- Skip filler phrases, greetings, and meta-statements like "Sure, here's the answer".
-- If the answer contains NO factual claims (e.g., "I don't know"), return an empty list.
-- Do NOT verify or judge the claims — only extract them.
-
-User's original question (for context only — do NOT extract claims from this):
-{query}
-
-LLM Answer (extract claims ONLY from this):
-{llm_output}
-
-Respond ONLY with this JSON (no markdown fences, no extra text):
-{{
-  "claims": [
-    "claim 1 text",
-    "claim 2 text",
-    "claim 3 text"
-  ]
-}}
-"""
-
-
 def _extract_claims(llm_output: str, query: str = "") -> List[str]:
     if not llm_output or len(llm_output.strip()) < 10:
         return []
@@ -278,11 +244,45 @@ def _extract_claims(llm_output: str, query: str = "") -> List[str]:
         re.IGNORECASE,
     )
 
+    # Conjunctions that introduce a factual assertion after a meta prefix
+    # e.g., "I don't have real-time info, BUT the CM of X is Y."
+    _FACTUAL_PIVOT = re.compile(
+        r",?\s+(?:but|however|though|although)\s+",
+        re.IGNORECASE,
+    )
+
     def _is_meta(sentence: str) -> bool:
         stripped = _LEADING_CONNECTIVES.sub("", sentence.lower().strip())
         return any(stripped.startswith(meta) for meta in meta_starts)
 
-    claims = [s for s in sentences if not _is_meta(s)]
+    def _extract_factual_part(sentence: str) -> str | None:
+        """If a meta-prefixed sentence has a factual 'but' clause, return that clause."""
+        parts = _FACTUAL_PIVOT.split(sentence, maxsplit=1)
+        if len(parts) == 2:
+            factual_part = parts[1].strip()
+            # Only keep if the factual part is substantive
+            if len(factual_part) > 20 and len(factual_part.split()) >= 4:
+                # Check the factual part isn't also meta
+                fp_lower = factual_part.lower()
+                if not any(fp_lower.startswith(m) for m in meta_starts):
+                    return factual_part
+        return None
+
+    claims: List[str] = []
+    for s in sentences:
+        if not _is_meta(s):
+            claims.append(s)
+        else:
+            # Try to rescue the factual clause from compound meta sentences
+            factual_part = _extract_factual_part(s)
+            if factual_part:
+                logger.debug(
+                    "Node 5 | Rescued factual clause from meta sentence: '%s'",
+                    factual_part[:80],
+                )
+                claims.append(factual_part)
+            else:
+                logger.debug("Node 5 | Filtered meta sentence: '%s'", s[:80])
 
     # Cap at 10 claims
     claims = claims[:10]
@@ -292,24 +292,6 @@ def _extract_claims(llm_output: str, query: str = "") -> List[str]:
 
     logger.info("Node 5 | Extracted %d validated claims via NLTK sentence split.", len(claims))
     return claims
-
-
-def _fallback_extract_claims(llm_output: str) -> List[str]:
-    sentences = [
-        s.strip()
-        for s in re.split(r"[.!?]+", llm_output)
-        if len(s.strip()) > 20
-    ]
-    # Filter out meta-statements
-    claims = [
-        s for s in sentences
-        if not any(meta in s.lower() for meta in [
-            "sure,", "here's", "i can help", "let me",
-            "based on", "according to", "in summary",
-        ])
-    ]
-    logger.info("Node 5 | Extracted %d claims via fallback sentence split.", len(claims))
-    return claims[:10]  # cap at 10
 
 
 def _validate_claims(claims: List[str], llm_output: str) -> List[str]:
@@ -454,12 +436,7 @@ def _fallback_verify(llm_output: str, rag_output: str) -> List[ClaimVerdict]:
     overlap = llm_content & rag_content
     overlap_ratio = len(overlap) / len(llm_content) if llm_content else 0
 
-    if overlap_ratio > 0.4:
-        verdict = "SUPPORTED"
-    elif overlap_ratio < 0.1:
-        verdict = "UNVERIFIABLE"
-    else:
-        verdict = "UNVERIFIABLE"
+    verdict = "SUPPORTED" if overlap_ratio > 0.4 else "UNVERIFIABLE"
 
     return [ClaimVerdict(
         claim=llm_output[:200],
@@ -480,17 +457,25 @@ def _compute_hallucination_score(
         return max(0.0, min(1.0, 1.0 - nli_alignment_score))
 
     claim_risks: List[float] = []
+    n_unverifiable = 0
+    n_contradicted = 0
     for v in verdicts:
+        if v.verdict == "UNVERIFIABLE":
+            n_unverifiable += 1
+        elif v.verdict == "CONTRADICTED":
+            n_contradicted += 1
+
         if v.nli_probabilities:
             # Use real NLI probabilities
             p_contra = v.nli_probabilities.get("contradiction", 0.0)
             p_neutral = v.nli_probabilities.get("neutral", 0.0)
             risk = p_contra + 0.3 * p_neutral
         else:
-            # Fallback: use verdict string (for Gemini fallback path)
+            # Fallback: use verdict string (for EGV / Gemini fallback path)
+            # UNVERIFIABLE = 0.15 risk (not the LLM's fault if RAG has no evidence)
             weights = {
                 "CONTRADICTED": 1.0,
-                "UNVERIFIABLE": 0.3,
+                "UNVERIFIABLE": 0.15,
                 "SUPPORTED": 0.0,
                 "NO_CLAIM": 0.0,
                 "HONEST_UNCERTAINTY": 0.0,
@@ -500,8 +485,25 @@ def _compute_hallucination_score(
 
     claim_score = sum(claim_risks) / len(claim_risks) if claim_risks else 0.0
 
-    # Composite: 70% claim-level risk, 30% (1 - alignment)
-    composite = 0.7 * claim_score + 0.3 * (1.0 - nli_alignment_score)
+    # Down-weight the alignment component when most claims are UNVERIFIABLE.
+    # A low alignment F1 caused by bad RAG (not bad LLM) shouldn't inflate
+    # the hallucination score. Only give it full weight when we have actual
+    # CONTRADICTED claims.
+    total = len(verdicts)
+    unverifiable_ratio = n_unverifiable / total if total else 0
+    if n_contradicted > 0:
+        # Real contradictions found — alignment score is meaningful
+        alignment_weight = 0.30
+    elif unverifiable_ratio > 0.5:
+        # Most claims unverifiable — RAG quality is poor, don't trust alignment
+        alignment_weight = 0.10
+    else:
+        alignment_weight = 0.25
+
+    claim_weight = 1.0 - alignment_weight
+
+    # Composite: claim-level risk + alignment penalty
+    composite = claim_weight * claim_score + alignment_weight * (1.0 - nli_alignment_score)
     return max(0.0, min(1.0, round(composite, 4)))
 
 
@@ -808,31 +810,23 @@ def _verify_single_code_claim(
     rag_output: str,
     verify_fn: Any,
 ) -> ClaimVerdict:
-    import re as _re
-    import textwrap as _tw
+    import textwrap
 
     # Extract code snippet from LLM output for verification
-    # Strategy 1: Fenced ```python blocks
-    code_block_re = _re.compile(r"```(?:python|py)?\s*\n([\s\S]*?)```", _re.IGNORECASE)
+    code_block_re = re.compile(r"```(?:python|py)?\s*\n([\s\S]*?)```", re.IGNORECASE)
     blocks = code_block_re.findall(llm_output)
 
     if blocks:
         code_snippet = blocks[0].strip()
     else:
-        # Strategy 2: Extract bare function definitions (handles unfenced code)
-        func_re = _re.compile(
+        func_re = re.compile(
             r"(def\s+\w+\s*\([^\)]*\)[^\n]*:\n(?:[ \t]+[^\n]*\n?)*)",
-            _re.MULTILINE,
+            re.MULTILINE,
         )
         funcs = func_re.findall(llm_output)
-        if funcs:
-            # Take the longest match (likely the main function with helpers)
-            code_snippet = max(funcs, key=len).strip()
-        else:
-            code_snippet = llm_output
+        code_snippet = str(max(funcs, key=len)).strip() if funcs else llm_output
 
-    # Always dedent so code starts at column 0 (handles class-wrapped code)
-    code_snippet = _tw.dedent(code_snippet)
+    code_snippet = textwrap.dedent(code_snippet)
 
     try:
         result = verify_fn(claim, code_snippet)
@@ -913,47 +907,3 @@ def _verify_single_math_claim(
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 10. Surgical Correction (post-processing)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _apply_surgical_corrections(
-    verdicts: List[ClaimVerdict],
-    llm_output: str,
-    rag_output: str,
-) -> tuple:
-    contradicted = [v for v in verdicts if v.verdict == "CONTRADICTED"]
-    if not contradicted:
-        return verdicts, llm_output
-
-    try:
-        from nodes.surgical_corrector import surgical_correct_single  # type: ignore[import-not-found]
-    except ImportError:
-        logger.warning("Node 5 | surgical_corrector not available, skipping corrections.")
-        return verdicts, llm_output
-
-    corrected = llm_output
-    corrections = 0
-
-    for v in contradicted:
-        evidence = v.evidence if v.evidence else rag_output[:3000]
-        try:
-            corrected = surgical_correct_single(corrected, v.claim, evidence)
-            corrections += 1
-            logger.info(
-                "Node 5 | Surgically corrected [%s]: '%s'",
-                v.verification_method, v.claim[:60],
-            )
-        except Exception as e:
-            logger.warning(
-                "Node 5 | Surgical correction failed for '%s': %s",
-                v.claim[:60], e,
-            )
-
-    if corrections:
-        logger.info(
-            "Node 5 | Applied %d/%d surgical corrections.",
-            corrections, len(contradicted),
-        )
-
-    return verdicts, corrected

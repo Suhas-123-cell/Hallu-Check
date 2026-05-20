@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from config import (  # type: ignore[import-not-found]
     ICR_MAX_ROUNDS,
@@ -140,10 +140,10 @@ def iterative_refine(
         logger.info("ICR | ── Round %d ──", round_num)
 
         # ── Step 1: Apply correction ─────────────────────────────────
-        # For FACTUAL queries, skip surgical correction (local LLM is too
-        # weak to produce grounded factual replacements) and go straight
-        # to the Gemini one-shot refiner which can synthesize from RAG.
-        use_surgical = ENABLE_SURGICAL_CORRECTION and route != "FACTUAL"
+        # For FACTUAL and REASONING_CODE queries, skip surgical correction
+        # (local LLM is too weak for factual replacements; surgical corrector
+        # also damages code blocks) and go straight to Gemini one-shot refiner.
+        use_surgical = ENABLE_SURGICAL_CORRECTION and route not in ("FACTUAL", "REASONING_CODE")
 
         if use_surgical:
             try:
@@ -255,14 +255,22 @@ def iterative_refine(
                         # Still use the one-shot answer if surgical was worse
                         best_answer = oneshot
 
-            logger.info(
-                "ICR | Converged at round %d (|Δ|=%.4f < ε=%.3f, final=%.4f).",
-                round_num, delta, epsilon, best_score,
-            )
+            actually_converged = best_score < HALLUCINATION_THRESHOLD
+            if actually_converged:
+                logger.info(
+                    "ICR | Converged at round %d (|Δ|=%.4f < ε=%.3f, final=%.4f).",
+                    round_num, delta, epsilon, best_score,
+                )
+            else:
+                logger.warning(
+                    "ICR | Stalled at round %d (|Δ|=%.4f < ε=%.3f, but score %.4f "
+                    "still above threshold %.2f). Answer may still be unreliable.",
+                    round_num, delta, epsilon, best_score, HALLUCINATION_THRESHOLD,
+                )
             return IterativeResult(
                 final_answer=best_answer,
                 rounds=rounds,
-                converged=True,
+                converged=actually_converged,
                 best_round=best_round,
                 total_rounds=len(rounds),
                 initial_score=initial_score,

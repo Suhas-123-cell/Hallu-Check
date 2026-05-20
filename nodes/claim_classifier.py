@@ -60,27 +60,19 @@ _CODE_KEYWORDS: list[str] = [
     "dynamic programming", "time complexity", "space complexity",
     "O(1)", "O(n)", "O(n^2)", "O(log n)", "O(n log n)",
     "big-o", "big o", "runtime complexity",
-    "array", "pointer", "iterator", "loop invariant",
     "sorting algorithm", "merge sort", "quick sort", "bubble sort",
     "heap sort", "insertion sort", "selection sort",
     "null pointer", "segfault", "syntax error", "compiler",
     "API endpoint", "REST API", "HTTP request",
-    # Additional HumanEval-relevant patterns
-    "returns", "input", "output", "parameter", "argument",
-    "string", "substring", "character", "index",
-    "list", "dictionary", "tuple", "boolean",
-    "empty list", "empty string", "edge case",
+    # Genuine programming constructs (removed generic words like
+    # "returns", "input", "output", "string", "list", etc. that
+    # also appear in normal factual prose about code topics)
     "helper function", "utility function", "wrapper",
-    "data structure", "implementation", "method",
+    "data structure", "implementation detail",
     "exception", "error handling", "validation",
-    "variable", "constant", "global", "local",
-    "iterate", "traversal", "loop", "nested loop",
-    "base case", "recursive call", "memoization",
+    "nested loop", "base case", "recursive call", "memoization",
     "palindrome", "anagram", "fibonacci", "prime",
-    "binary", "decimal", "hexadecimal", "bitwise",
-    "slice", "concatenate", "reverse", "flatten",
-    "filter", "map", "reduce", "lambda",
-    "type hint", "annotation", "docstring",
+    "bitwise", "type hint", "annotation", "docstring",
 ]
 
 # ── Math indicators ──────────────────────────────────────────────────────────
@@ -142,7 +134,7 @@ def _heuristic_classify(claim: str) -> ClaimType | None:
             return "code"
 
     code_hits = sum(1 for kw in _CODE_KEYWORDS if kw in claim_lower)
-    if code_hits >= 2:
+    if code_hits >= 3:
         logger.debug("claim_classifier | heuristic → code (%d keyword hits)", code_hits)
         return "code"
 
@@ -161,7 +153,14 @@ def _heuristic_classify(claim: str) -> ClaimType | None:
 
    
     if code_hits == 1 and math_hits == 0:
-        return "code"
+        # Only classify as code if the claim itself contains code syntax —
+        # a single keyword hit in prose about code topics is not enough.
+        for pat in _CODE_PATTERNS:
+            if pat.search(claim):
+                return "code"
+        # Single keyword without code syntax → treat as factual
+        logger.debug("claim_classifier | single code keyword but no syntax → factual")
+        return "factual"
     if math_hits == 1 and code_hits == 0:
         return "math"
 

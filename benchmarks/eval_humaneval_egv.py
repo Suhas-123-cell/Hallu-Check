@@ -10,7 +10,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List
 
 import pandas as pd  # type: ignore[import-untyped]
 from tqdm import tqdm  # type: ignore[import-untyped]
@@ -77,8 +77,8 @@ def _run_tests(prompt: str, code: str, test: str, entry_point: str) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 # Llama output cache (disk-backed, persists across benchmark runs)
 # ─────────────────────────────────────────────────────────────────────────────
-_llama_cache: Optional[Dict[str, str]] = None
-_llama_cache_path: Optional[str] = None
+_llama_cache: Dict[str, str] | None = None
+_llama_cache_path: str | None = None
 
 
 def enable_llama_cache(cache_file: str = "llama_cache.json") -> int:
@@ -292,8 +292,7 @@ def evaluate_humaneval_egv(
     rows: List[Dict[str, Any]] = []
 
     for i, sample in enumerate(tqdm(samples, desc="HumanEval EGV Benchmark", unit="problem")):
-        sample = cast(Dict[str, Any], sample)
-        # Fix 4: 3-second delay between problems to prevent burst rate limiting
+        # 3-second delay between problems to prevent burst rate limiting
         if i > 0:
             time.sleep(3)
         task_id = sample.get("task_id", "")
@@ -440,7 +439,7 @@ def compute_metrics(df: pd.DataFrame) -> Dict[str, Any]:
     n_correct = is_correct.sum()
 
     return {
-        "total_problems": int(total),
+        "total_problems": total,
         "n_buggy_code": int(n_buggy),
         "n_correct_code": int(n_correct),
         # Full pipeline (EGV + NLI)

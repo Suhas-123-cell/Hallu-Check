@@ -10,7 +10,6 @@ logger = logging.getLogger("hallu-check.surgical_corrector")
 
 
 def _local_generate_short(prompt: str) -> str:
-    """Generate a short response using the local LLM (Ollama/HF)."""
     messages = [
         {"role": "system", "content": "You are a concise fact corrector. Output ONLY the corrected text — no preamble, no explanation."},
         {"role": "user", "content": prompt},
@@ -264,6 +263,7 @@ def surgical_correct_single(
     # the original content (LLM shouldn't have rewritten everything)
     original_words = set(original_answer.lower().split())
     corrected_words = set(corrected.lower().split())
+    preservation = 1.0  # default if original_words is empty
     if original_words:
         preservation = len(original_words & corrected_words) / len(original_words)
         if preservation < 0.5:

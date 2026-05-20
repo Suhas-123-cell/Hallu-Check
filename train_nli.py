@@ -217,7 +217,7 @@ def load_mnli_parquet(path: str) -> Dataset:
 
     df = pd.read_parquet(path)
     df = df[["premise", "hypothesis", "label"]].copy()
-    df = df.dropna(subset=["label"])
+    df = df.dropna(subset=["label"])  # type: ignore[call-overload]
     df["label"] = df["label"].astype(int)
 
     # ── CRITICAL: Filter out invalid labels ──────────────────────────
@@ -327,7 +327,7 @@ def train(args: argparse.Namespace) -> None:
             logger.info("Auto-selected optim=%s (GPU VRAM %.1f GB)", args.optim, total_vram_gb)
         if args.optim in ("adamw_bnb_8bit", "paged_adamw_8bit"):
             try:
-                import bitsandbytes  # noqa: F401
+                import bitsandbytes  # type: ignore[import-not-found]  # noqa: F401
             except ImportError as e:
                 raise RuntimeError(
                     f"optim={args.optim} requires bitsandbytes. "

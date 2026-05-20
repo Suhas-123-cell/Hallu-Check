@@ -7,14 +7,16 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(message)s",
 )
 logger = logging.getLogger("benchmark.ablation")
-
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("openai").setLevel(logging.WARNING)
+logging.getLogger("rag_pipeline").setLevel(logging.WARNING)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
@@ -108,7 +110,7 @@ def run_ablation(
     dataset: str = "truthfulqa",
     max_samples: int = 50,
 ) -> List[Dict]:
-    results: List[Dict] = []
+    results: List[Dict[str, Any]] = []
 
     for config_idx, ablation in enumerate(ABLATION_CONFIGS):
         config_name = ablation["name"]
@@ -119,7 +121,8 @@ def run_ablation(
         )
 
         # Set environment variables
-        _set_env(ablation["env"])
+        env_cfg: Dict[str, str] = ablation["env"]  # type: ignore[assignment]
+        _set_env(env_cfg)
         _reload_config()
 
         t0 = time.time()
@@ -129,13 +132,13 @@ def run_ablation(
                 from benchmarks.eval_e2e import evaluate_truthfulqa_e2e  # type: ignore
                 metrics = evaluate_truthfulqa_e2e(
                     max_samples=max_samples,
-                    enable_icr=ablation["env"].get("ENABLE_ICR") == "true",
+                    enable_icr=env_cfg.get("ENABLE_ICR") == "true",
                 )
             elif dataset == "halueval":
                 from benchmarks.eval_e2e import evaluate_halueval_e2e  # type: ignore
                 metrics = evaluate_halueval_e2e(
                     max_samples=max_samples,
-                    enable_icr=ablation["env"].get("ENABLE_ICR") == "true",
+                    enable_icr=env_cfg.get("ENABLE_ICR") == "true",
                 )
             else:
                 logger.error("Unknown dataset: %s", dataset)
@@ -146,11 +149,13 @@ def run_ablation(
             metrics = {"error": str(e)}
 
         elapsed = time.time() - t0
-        metrics["config_name"] = config_name
-        metrics["config_env"] = ablation["env"]
-        metrics["elapsed_seconds"] = round(elapsed, 1)
 
-        results.append(metrics)
+        result_entry: Dict[str, Any] = dict(metrics)
+        result_entry["config_name"] = config_name
+        result_entry["config_env"] = env_cfg
+        result_entry["elapsed_seconds"] = round(elapsed, 1)
+
+        results.append(result_entry)
 
         logger.info(
             "  Config '%s' complete in %.1fs",

@@ -25,7 +25,7 @@ _GEMINI_GENERATE_CONFIG = genai_types.GenerateContentConfig(
 
 def _parse_retry_delay(error_msg: str) -> float:
     # Match patterns like "retryDelay': '31s'" or "retryDelay': '537.373052ms'"
-    match = re.search(r"retryDelay['\"]:\s*['\"](\d+(?:\.\d+)?)(s|ms)", str(error_msg))
+    match = re.search(r"retryDelay['\"]:\s*['\"](\d+(?:\.\d+)?)(s|ms)", error_msg)
     if match:
         value = float(match.group(1))
         unit = match.group(2)
@@ -39,15 +39,6 @@ def _gemini_generate(prompt: str) -> str:
             "GEMINI_API_KEY is not set. Add it to your .env file.\n"
             "Get one free at https://aistudio.google.com/app/apikey"
         )
-    # Workaround for macOS Python SSL Certificate / gRPC DNS resolution issues
-    import ssl
-    import os
-    os.environ["GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"] = ""
-    try:
-        ssl._create_default_https_context = ssl._create_unverified_context
-    except AttributeError:
-        pass
-
     client = genai.Client(api_key=GEMINI_API_KEY)
 
     for attempt in range(1, _MAX_RETRIES + 1):
@@ -190,6 +181,33 @@ def _build_reasoning_prompt(
     )
 
 
+def _build_code_prompt(
+    query: str,
+    llm_output: str,
+    claim_report: dict,
+) -> str:
+    """Prompt for code-generation queries where the user explicitly asked for code."""
+    return (
+        "You are an expert programmer. The user asked for code and the original "
+        "generated code has been flagged as potentially incorrect.\n\n"
+        "Your task:\n"
+        "1. Write a CORRECT, WORKING implementation that directly answers the query.\n"
+        "2. Include clear inline comments explaining the logic.\n"
+        "3. Include example usage that demonstrates the code works.\n"
+        "4. If the original code was mostly correct, fix ONLY the bugs — "
+        "do NOT rewrite from scratch unnecessarily.\n\n"
+        "OUTPUT FORMAT:\n"
+        "• Start with a brief 1-2 sentence explanation of the approach.\n"
+        "• Then provide the complete, runnable code in a ```python``` block.\n"
+        "• End with example usage and expected output.\n"
+        "• Do NOT include follow-up questions or lengthy explanations.\n\n"
+        f"Original Query: {query}\n\n"
+        f"Original Generated Code:\n{llm_output[:6000]}\n\n"
+        f"Verification Report (what's wrong):\n{claim_report}\n\n"
+        "Corrected code:"
+    )
+
+
 def refine_with_evidence(
     query: str,
     rag_output: str,
@@ -199,7 +217,11 @@ def refine_with_evidence(
     logger.info("Node 6 | Evidence-based refinement (route=%s)…", route)
 
     # ── Select prompt based on gatekeeper route ──────────────────────
-    if route == "REASONING":
+    if route == "REASONING_CODE":
+        # Code-specific prompt: user asked for code, produce code
+        llm_output = claim_report.get("original_output", rag_output)
+        prompt = _build_code_prompt(query, llm_output, claim_report)
+    elif route == "REASONING":
         # For reasoning queries, rag_output is typically a placeholder;
         # the llm_output is embedded in the claim_report's original text.
         llm_output = claim_report.get("original_output", rag_output)
@@ -218,3 +240,4 @@ def refine_with_evidence(
 
     logger.info("Node 6 | Evidence-based refinement received (%d chars).", len(answer))
     return answer
+
