@@ -79,7 +79,7 @@ app.add_middleware(
 class GenerateRequest(BaseModel):
     query: str = Field(
         ...,
-        min_length=3,
+        min_length=1,
         max_length=10000,
         json_schema_extra={"examples": ["What is the capital of France?"]},
     )
