@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 import torch
 from transformers import (  # type: ignore[import-untyped]
     AutoModelForSequenceClassification,
-    DebertaV2Tokenizer,
+    AutoTokenizer,
 )
 
 logger = logging.getLogger("hallu-check.nli_model")
@@ -23,7 +23,7 @@ LABEL_NAMES = ["entailment", "neutral", "contradiction"]
 
 # ── Singleton state 
 _model: Optional[AutoModelForSequenceClassification] = None
-_tokenizer: Optional[DebertaV2Tokenizer] = None
+_tokenizer: Optional[AutoTokenizer] = None
 _device: Optional[torch.device] = None
 _loaded: bool = False
 
@@ -61,7 +61,7 @@ def load_model(
 
         _device = torch.device(device) if device else _detect_device()
 
-        _tokenizer = DebertaV2Tokenizer.from_pretrained(model_path)
+        _tokenizer = AutoTokenizer.from_pretrained(model_path)
         _model = AutoModelForSequenceClassification.from_pretrained(model_path)
         _model.to(_device)
         _model.eval()

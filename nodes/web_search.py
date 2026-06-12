@@ -137,7 +137,16 @@ def _score_result_recency(
         if prefer_factual:
             score += 3   # Strong boost for factual/origin queries
         elif prefer_recent:
-            score -= 1   # Slight penalty for recency queries
+            # Political/positional "who is" queries: Wikipedia tracks current officeholders
+            # and is authoritative even for recency queries (e.g. "who is CM of Telangana")
+            political_url = any(
+                t in url_lower
+                for t in ("chief_minister", "minister", "president", "governor", "election", "india", "politics")
+            )
+            if political_url:
+                score += 2
+            else:
+                score -= 1  # Slight penalty for non-political recency queries
         # else: neutral — no change
 
     # Encyclopedic / academic sources also get a boost for factual queries
@@ -1136,6 +1145,49 @@ def search_and_scrape_with_depth2(
         except Exception as e:
             logger.error("Node 3 | Failed to save error markdown: %s", e)
         return md_path, fallback
+
+    # C-RAG: filter irrelevant primary chunks before building markdown
+    if query:
+        relevant = [
+            r for r in enriched_results
+            if _evaluate_chunk_relevance(r["primary_text"], query)
+        ]
+        if relevant:
+            logger.info(
+                "C-RAG | Kept %d/%d depth-2 chunks after relevance filtering.",
+                len(relevant), len(enriched_results),
+            )
+            enriched_results = relevant
+        else:
+            logger.warning(
+                "C-RAG | All %d depth-2 chunks irrelevant — rewriting query and retrying…",
+                len(enriched_results),
+            )
+            new_keywords = _rewrite_query(query, keywords)
+            retry_raw = _web_search(
+                new_keywords, max_results=max(SEARCH_MAX_RESULTS, 6), query=query
+            )
+            if retry_raw:
+                retry_enriched: List[dict] = []
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=min(4, len(retry_raw))
+                ) as ex:
+                    for fut in concurrent.futures.as_completed(
+                        [ex.submit(process_primary, item) for item in retry_raw]
+                    ):
+                        r = fut.result()
+                        if r:
+                            retry_enriched.append(r)
+                if retry_enriched:
+                    relevant_retry = [
+                        r for r in retry_enriched
+                        if _evaluate_chunk_relevance(r["primary_text"], query)
+                    ]
+                    enriched_results = relevant_retry or retry_enriched
+                    logger.info(
+                        "C-RAG | Re-search produced %d chunks after filtering.",
+                        len(enriched_results),
+                    )
 
     # Build consolidated markdown with depth-2 context
     markdown = _build_markdown_with_depth2(enriched_results)
