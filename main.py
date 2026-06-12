@@ -31,6 +31,7 @@ from nodes.refiner import refine_with_evidence, refine_response  # type: ignore[
 from nodes.recursive_reasoner import recursive_reason  # type: ignore[import-not-found] # Node 1.5 (RLM)
 from nodes.iterative_refiner import iterative_refine  # type: ignore[import-not-found] # ICR (Contribution 1)
 from nodes.execution_verifier import verify_code, verify_math, has_code, has_math  # type: ignore[import-not-found] # EGV (Contribution 2)
+from nodes.query_cache import get_cache  # type: ignore[import-not-found] # Query cache
 
 logging.basicConfig(
     level=logging.INFO,
@@ -83,6 +84,18 @@ class GenerateRequest(BaseModel):
         max_length=10000,
         json_schema_extra={"examples": ["What is the capital of France?"]},
     )
+    conversation_history: list[dict] | None = Field(
+        default=None,
+        description="Prior turns as [{role, content}] to maintain multi-turn context.",
+    )
+
+
+class SummarizeRequest(BaseModel):
+    history: list[dict] = Field(..., description="Conversation turns to summarize.")
+
+
+class SummarizeResponse(BaseModel):
+    summary: str
 
 
 class ClaimVerdictSchema(BaseModel):
@@ -106,6 +119,7 @@ class GenerateResponse(BaseModel):
     hallucination_summary: str                # Human-readable summary
     verification_method: str = "gemini"       # "nli" or "gemini" — which verifier was used
     final_answer: str
+    cache_hit: bool = False
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
@@ -115,10 +129,10 @@ async def health() -> dict:
 
 
 # ── CHITCHAT handler ─────────────────────────────────────────────────────────
-async def _handle_chitchat(query: str) -> GenerateResponse:
+async def _handle_chitchat(query: str, history: list | None = None) -> GenerateResponse:
     logger.info("── Route: CHITCHAT → Node 1 only")
 
-    llm_output = await asyncio.to_thread(generate_llm_output, query)
+    llm_output = await asyncio.to_thread(generate_llm_output, query, history)
 
     return GenerateResponse(
         query=query,
@@ -135,14 +149,14 @@ async def _handle_chitchat(query: str) -> GenerateResponse:
 
 
 # ── REASONING handler ────────────────────────────────────────────────────────
-async def _handle_reasoning(query: str) -> GenerateResponse:
+async def _handle_reasoning(query: str, history: list | None = None) -> GenerateResponse:
     # Sub-classify the REASONING query
     reasoning_subtype = await asyncio.to_thread(classify_reasoning_subtype, query)
     logger.info("── Route: %s → specialized pipeline", reasoning_subtype)
 
     # ── Node 1: LLM Generator ────────────────────────────────────────
     logger.info("── Node 1: Generating answer with LLM…")
-    llm_output = await asyncio.to_thread(generate_llm_output, query)
+    llm_output = await asyncio.to_thread(generate_llm_output, query, history)
 
     # ── Node 1.5: Recursive Language Model reasoning (optional) ──────
     # RLM only runs for REASONING_LOGIC. For CODE/MATH, the LLM's code
@@ -307,8 +321,28 @@ async def _handle_reasoning(query: str) -> GenerateResponse:
 
 
 # ── FACTUAL handler ──────────────────────────────────────────────────────────
-async def _handle_factual(query: str) -> GenerateResponse:
+async def _handle_factual(query: str, history: list | None = None) -> GenerateResponse:
     logger.info("── Route: FACTUAL → full pipeline")
+
+    # ── Cache check ───────────────────────────────────────────────────────────
+    cache = get_cache()
+    cached = cache.lookup(query)
+    if cached:
+        logger.info("── Cache HIT — skipping pipeline")
+        return GenerateResponse(
+            query=query,
+            query_category="FACTUAL",
+            llm_output=cached["final_answer"],
+            rag_output="",
+            alignment_score={"precision": 1.0, "recall": 1.0, "f1": 1.0},
+            claim_verdicts=[],
+            hallucination_score=cached["hallucination_score"],
+            hallucination_detected=False,
+            hallucination_summary="Answered from cache — previously verified.",
+            verification_method=cached["verification_method"],
+            final_answer=cached["final_answer"],
+            cache_hit=True,
+        )
 
     # Generate a unique temp markdown path for this request
     md_path = generate_md_path()
@@ -316,7 +350,7 @@ async def _handle_factual(query: str) -> GenerateResponse:
     try:
         # ── Node 1: LLM Generator ────────────────────────────────────
         logger.info("── Node 1: Generating preliminary answer with LLM…")
-        llm_output = await asyncio.to_thread(generate_llm_output, query)
+        llm_output = await asyncio.to_thread(generate_llm_output, query, history)
 
         # ── Node 1.5: Self-Consistency Check (optional) ──────────────
         consistency_result = None
@@ -495,6 +529,17 @@ async def _handle_factual(query: str) -> GenerateResponse:
             alignment["f1"],
         )
 
+        # ── Cache store: persist only verified answers ────────────────────────
+        if hallu_report.hallucination_score < 0.35:
+            try:
+                get_cache().store(
+                    query, final_answer,
+                    hallu_report.hallucination_score,
+                    hallu_report.verification_method,
+                )
+            except Exception as cache_exc:
+                logger.debug("Cache store skipped: %s", cache_exc)
+
         return GenerateResponse(
             query=query,
             query_category="FACTUAL",
@@ -536,11 +581,12 @@ _PIPELINE_TIMEOUT = 300  # 5 minutes — enough for massive inputs through all n
 @app.post("/generate", response_model=GenerateResponse, tags=["pipeline"])
 async def generate(payload: GenerateRequest) -> GenerateResponse:
     query = payload.query
-    logger.info("═══════ Pipeline start: %r ═══════", query)
+    history = payload.conversation_history or []
+    logger.info("═══════ Pipeline start: %r (history=%d turns) ═══════", query, len(history))
 
     try:
         return await asyncio.wait_for(
-            _run_pipeline(query), timeout=_PIPELINE_TIMEOUT
+            _run_pipeline(query, history), timeout=_PIPELINE_TIMEOUT
         )
 
     except asyncio.TimeoutError:
@@ -563,7 +609,7 @@ async def generate(payload: GenerateRequest) -> GenerateResponse:
         ) from exc
 
 
-async def _run_pipeline(query: str) -> GenerateResponse:
+async def _run_pipeline(query: str, history: list | None = None) -> GenerateResponse:
     # ── Node 0: Gatekeeper — classify query ──────────────────────
     logger.info("── Node 0: Classifying query…")
     classification = await asyncio.to_thread(classify_query, query)
@@ -575,12 +621,44 @@ async def _run_pipeline(query: str) -> GenerateResponse:
 
     # ── Route based on classification ─────────────────────────────
     if category == "CHITCHAT":
-        return await _handle_chitchat(query)
+        return await _handle_chitchat(query, history)
     elif category == "REASONING":
-        return await _handle_reasoning(query)
+        return await _handle_reasoning(query, history)
     else:
-        # FACTUAL (default — also catches unknown categories)
-        return await _handle_factual(query)
+        return await _handle_factual(query, history)
+
+
+@app.get("/cache/stats", tags=["meta"])
+async def cache_stats() -> dict:
+    return get_cache().stats()
+
+
+@app.post("/summarize", response_model=SummarizeResponse, tags=["pipeline"])
+async def summarize_history(payload: SummarizeRequest) -> SummarizeResponse:
+    """Compress conversation history into a 2-3 sentence summary using the LLM."""
+    turns = payload.history
+    if not turns:
+        return SummarizeResponse(summary="")
+
+    transcript = "\n".join(
+        f"{msg['role'].capitalize()}: {msg['content']}"
+        for msg in turns
+        if msg.get("role") in ("user", "assistant")
+    )
+
+    prompt = (
+        "Summarize the following conversation in 2-3 concise sentences. "
+        "Preserve key facts and conclusions. Return ONLY the summary, no preamble.\n\n"
+        f"{transcript}"
+    )
+
+    try:
+        summary = await asyncio.to_thread(generate_llm_output, prompt)
+        logger.info("Summarized %d turns into %d chars.", len(turns), len(summary))
+        return SummarizeResponse(summary=summary.strip())
+    except Exception as exc:
+        logger.error("Summarization failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Summarization failed: {exc}") from exc
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

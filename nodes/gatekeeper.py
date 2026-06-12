@@ -74,12 +74,22 @@ _REASONING_KEYWORDS = [
     "code", "implementation", "script", "program",
 ]
 
-# Chitchat patterns
+# Chitchat patterns — checked BEFORE factual patterns
 _CHITCHAT_PATTERNS = [
     r"^(hi|hello|hey|good\s*(morning|afternoon|evening|night)|thanks|thank\s*you|bye|goodbye|ok|okay)\s*[!.?]*$",
     r"^how\s+are\s+you",
     r"^what'?s?\s+up",
     r"^yo\b",
+    # Self-referential identity questions → always CHITCHAT (not web-searchable)
+    r"^who\s+are\s+you\b",
+    r"^what\s+are\s+you\b",
+    r"^why\s+are\s+you\b",
+    r"^who\s+am\s+i\b",
+    r"^what\s+can\s+you\s+do\b",
+    r"^what\s+do\s+you\s+do\b",
+    r"^are\s+you\s+(an?\s+)?(ai|bot|chatbot|assistant|robot|human)\b",
+    r"^tell\s+me\s+about\s+your(self)?\b",
+    r"^introduce\s+your(self)?\b",
 ]
 
 # Factual query patterns — "who is X?", "what is X?", etc.
@@ -103,12 +113,11 @@ _FACTUAL_KEYWORDS = [
 def _heuristic_classify(query: str) -> Dict[str, object] | None:
     query_lower = query.lower().strip()
 
-    # ── Check CHITCHAT first (short, simple greetings) ────────────────
-    if len(query_lower) < 50:
-        for pattern in _CHITCHAT_PATTERNS:
-            if re.match(pattern, query_lower, re.IGNORECASE):
-                logger.info("Node 0 | Heuristic → CHITCHAT (greeting pattern)")
-                return {"category": "CHITCHAT", "confidence": 0.95}
+    # ── Check CHITCHAT first ───────────────────────────────────────────
+    for pattern in _CHITCHAT_PATTERNS:
+        if re.match(pattern, query_lower, re.IGNORECASE):
+            logger.info("Node 0 | Heuristic → CHITCHAT (pattern: %s)", pattern[:40])
+            return {"category": "CHITCHAT", "confidence": 0.95}
 
     # ── Check FACTUAL patterns (common factual question structures) ───
     for pattern in _FACTUAL_PATTERNS:

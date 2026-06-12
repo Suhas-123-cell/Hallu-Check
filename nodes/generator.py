@@ -14,18 +14,23 @@ logger = logging.getLogger("hallu-check.generator")
     wait=wait_exponential(multiplier=1, min=2, max=10),
     reraise=True,
 )
-def generate_llm_output(query: str) -> str:
-  
+def generate_llm_output(
+    query: str,
+    history: list | None = None,
+) -> str:
     messages = [
         {
             "role": "system",
             "content": (
-                "You are a helpful, accurate assistant. "
-                "Answer the user's question concisely and factually."
+                "You are Hallu-Check, an AI assistant that detects and corrects hallucinations. "
+                "When asked who or what you are, always identify yourself as Hallu-Check. "
+                "Answer all other questions concisely and factually."
             ),
         },
-        {"role": "user", "content": query},
     ]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": query})
 
     # ── Primary: Ollama (local, free) ────────────────────────────────
     try:
