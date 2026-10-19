@@ -1,4 +1,4 @@
-# 🔍 Hallu-Check
+# Hallu-Check
 
 > **Status: archived, superseded by [IntentShield](https://github.com/Suhas-123-cell/IntentShield).**
 > This was an exploratory prototype. It has no automated tests, CI or Docker image, and some
