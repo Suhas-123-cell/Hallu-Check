@@ -35,6 +35,10 @@ logs/
 benchmarks/*.json
 benchmarks/*.csv
 benchmarks/llama_cache.json
+# Eval runs: keep generations/grades/reports under version control (they ARE the
+# results); ignore only scraped web text (size + copyright) and dataset caches.
+runs/*/evidence/
+runs/*/data_cache/
 
 # ── Gemini / Antigravity ─────────────────────
 .gemini/
