@@ -58,8 +58,8 @@ def generate_llm_output(
             "Or set HF_API_TOKEN in your .env file."
         )
 
-    from huggingface_hub import InferenceClient  # type: ignore[import-untyped, import-not-found]
-    client = InferenceClient(api_key=HF_API_TOKEN, timeout=120)
+    from nodes.llm_client import make_client  # type: ignore[import-not-found]
+    client = make_client(timeout=120)
 
     try:
         response = client.chat_completion(
@@ -148,8 +148,8 @@ def generate_llm_output_with_context(
             "Neither Ollama nor HF_API_TOKEN available."
         )
 
-    from huggingface_hub import InferenceClient  # type: ignore[import-untyped, import-not-found]
-    client = InferenceClient(api_key=HF_API_TOKEN, timeout=120)
+    from nodes.llm_client import make_client  # type: ignore[import-not-found]
+    client = make_client(timeout=120)
 
     try:
         response = client.chat_completion(

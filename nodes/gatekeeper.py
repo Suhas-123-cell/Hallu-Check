@@ -5,7 +5,7 @@ import logging
 import re
 from typing import Dict
 
-from huggingface_hub import InferenceClient  # type: ignore[import-untyped, import-not-found]
+from nodes.llm_client import make_client  # type: ignore[import-not-found]
 
 from config import HF_API_TOKEN, LOCAL_MODEL_ID  # type: ignore[import-not-found]
 
@@ -202,7 +202,7 @@ def classify_query(query: str) -> Dict[str, object]:
         query_for_llm += "\n[... truncated ...]"
 
     try:
-        client = InferenceClient(api_key=HF_API_TOKEN, timeout=120)
+        client = make_client(timeout=120)
         response = client.chat_completion(
             model=LOCAL_MODEL_ID,
             messages=[

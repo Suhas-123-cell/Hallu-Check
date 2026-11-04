@@ -18,6 +18,14 @@ LOCAL_MODEL_ID: str = os.getenv(
     "meta-llama/Llama-3.2-1B-Instruct",
 )
 
+# ── Small-model backend (see nodes/llm_client.py) ──
+# "ollama": every small-model call uses the local OLLAMA_MODEL (LOCAL_MODEL_ID ignored)
+# "hf":     HuggingFace Inference API with LOCAL_MODEL_ID
+LLM_BACKEND: str = os.getenv("LLM_BACKEND", "hf").strip().lower()
+OLLAMA_URL: str = os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
+
 # ── Google Gemini ─────────────────────────────
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
