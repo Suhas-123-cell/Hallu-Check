@@ -120,6 +120,7 @@ class GenerateResponse(BaseModel):
     verification_method: str = "gemini"       # "nli" or "gemini" — which verifier was used
     final_answer: str
     cache_hit: bool = False
+    refinement_failed: bool = False           # True if hallucination was detected but refinement couldn't fix it
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
@@ -295,6 +296,11 @@ async def _handle_reasoning(query: str, history: list | None = None) -> Generate
     else:
         logger.info("── Node 6: No hallucination — keeping original answer.")
 
+    refinement_failed = (
+        hallu_report.hallucination_detected
+        and final_answer.strip() == reasoned_output.strip()
+    )
+
     return GenerateResponse(
         query=query,
         query_category="REASONING",
@@ -317,6 +323,7 @@ async def _handle_reasoning(query: str, history: list | None = None) -> Generate
         hallucination_summary=hallu_report.summary,
         verification_method=hallu_report.verification_method,
         final_answer=final_answer,
+        refinement_failed=refinement_failed,
     )
 
 
@@ -540,6 +547,11 @@ async def _handle_factual(query: str, history: list | None = None) -> GenerateRe
             except Exception as cache_exc:
                 logger.debug("Cache store skipped: %s", cache_exc)
 
+        refinement_failed = (
+            hallu_report.hallucination_detected
+            and final_answer.strip() == reasoned_output.strip()
+        )
+
         return GenerateResponse(
             query=query,
             query_category="FACTUAL",
@@ -562,6 +574,7 @@ async def _handle_factual(query: str, history: list | None = None) -> GenerateRe
             hallucination_summary=hallu_report.summary,
             verification_method=hallu_report.verification_method,
             final_answer=final_answer,
+            refinement_failed=refinement_failed,
         )
 
     finally:

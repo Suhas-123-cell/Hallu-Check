@@ -187,6 +187,12 @@ def _process_query(query: str, history: list) -> Optional[dict]:
             print(f"\n  summary: {hall_summary}")
 
         print(f"\n  {'─' * 56}")
+        if data.get("refinement_failed"):
+            print(
+                f"  {BOLD}\033[91m⚠ refinement failed{RESET} — hallucination was detected "
+                f"but the correction step could not fix it (e.g. Gemini call failed). "
+                f"{DIM}The answer below is unrefined and may still be wrong.{RESET}"
+            )
         print(f"  {BOLD}final answer:{RESET}")
         for line in data["final_answer"].split("\n"):
             print(f"     {line}")
