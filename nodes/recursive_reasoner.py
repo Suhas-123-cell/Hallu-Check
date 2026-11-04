@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Callable, List, Optional, Tuple
 
-from huggingface_hub import InferenceClient  # type: ignore[import-untyped, import-not-found]
+from nodes.llm_client import make_client  # type: ignore[import-not-found]
 from tenacity import retry, stop_after_attempt, wait_exponential  # type: ignore[import-untyped, import-not-found]
 
 from config import HF_API_TOKEN, LOCAL_MODEL_ID  # type: ignore[import-not-found]
@@ -32,13 +32,13 @@ _MAX_RAG_PER_LEAF = 3
 TreeQueryFn = Callable[[str], str]
 
 
-def _client() -> InferenceClient:
+def _client():
     if not HF_API_TOKEN:
         raise EnvironmentError(
             "HF_API_TOKEN is not set. Add it to your .env file.\n"
             "Get one at https://huggingface.co/settings/tokens"
         )
-    return InferenceClient(api_key=HF_API_TOKEN, timeout=_ROOT_TIMEOUT)
+    return make_client(timeout=_ROOT_TIMEOUT)
 
 
 def _extract_json_array(text: str) -> List[str] | None:
@@ -189,7 +189,7 @@ def _solve_leaf(sub_question: str, tree_query: Optional[TreeQueryFn] = None) -> 
     leaf_system = _build_leaf_system(has_python, has_rag)
 
     try:
-        client = InferenceClient(api_key=HF_API_TOKEN, timeout=_LEAF_TIMEOUT)
+        client = make_client(timeout=_LEAF_TIMEOUT)
 
         draft_resp = client.chat_completion(
             model=LOCAL_MODEL_ID,

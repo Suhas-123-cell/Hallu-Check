@@ -241,14 +241,14 @@ def _generate_test_cases_llm(
     query: str,
     code: str,
 ) -> List[TestCase]:
-    from huggingface_hub import InferenceClient  # type: ignore[import-untyped, import-not-found]
+    from nodes.llm_client import make_client  # type: ignore[import-not-found]
     from config import HF_API_TOKEN, LOCAL_MODEL_ID  # type: ignore[import-not-found]
 
     if not HF_API_TOKEN:
         return []
 
     try:
-        client = InferenceClient(api_key=HF_API_TOKEN, timeout=60)
+        client = make_client(timeout=60)
         prompt = (
             "Generate 3-5 test cases for this Python function. "
             "For each test case, output ONLY in this exact format:\n"
