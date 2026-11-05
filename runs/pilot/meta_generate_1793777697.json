@@ -1,0 +1,60 @@
+{
+  "timestamp": "2026-11-04T13:04:57",
+  "git_commit": "c799be4f620b815ec57682c58d78979549563f16",
+  "git_dirty": true,
+  "python": "3.13.13",
+  "command": "generate",
+  "dataset": [
+    "truthfulqa/truthful_qa",
+    "generation",
+    "validation"
+  ],
+  "n_samples": 5,
+  "seed": 0,
+  "systems": [
+    "pipeline",
+    "llama",
+    "gemini",
+    "gemini_rag"
+  ],
+  "blocked_domains": [
+    "huggingface.co",
+    "hf.co",
+    "github.com",
+    "githubusercontent.com",
+    "gitlab.com",
+    "arxiv.org",
+    "openreview.net",
+    "aclanthology.org",
+    "paperswithcode.com",
+    "semanticscholar.org",
+    "researchgate.net",
+    "kaggle.com",
+    "papers.nips.cc",
+    "proceedings.mlr.press",
+    "proceedings.neurips.cc",
+    "ar5iv.labs.arxiv.org",
+    "alphaxiv.org",
+    "scholar.archive.org"
+  ],
+  "blocked_markers": "truthful[\\s_\\-]?qa|halu[\\s_\\-]?eval|imitative falsehoods|lin,? hilton,? (and|&) evans",
+  "pipeline": {
+    "LLM_BACKEND": "ollama",
+    "OLLAMA_MODEL": "llama3.2:3b",
+    "OLLAMA_NUM_CTX": 16384,
+    "LOCAL_MODEL_ID": "Qwen/Qwen2.5-7B-Instruct",
+    "GEMINI_MODEL": "gemini-2.5-flash",
+    "NLI_MODEL_PATH": "/Users/suhasdev/Documents/hallu-check/models/nli-deberta-v3-mnli/final",
+    "HALLUCINATION_THRESHOLD": 0.3,
+    "ENABLE_ICR": true,
+    "ICR_MAX_ROUNDS": 3,
+    "ENABLE_SELF_CONSISTENCY": true,
+    "N_CONSISTENCY_SAMPLES": 3,
+    "ENABLE_EGV": true,
+    "ENABLE_SURGICAL_CORRECTION": true,
+    "ENABLE_RLM_REASONING": true,
+    "SEARCH_MAX_RESULTS": 5,
+    "generator_backend": "ollama:llama3.2:3b",
+    "nli_calibration_active": false
+  }
+}

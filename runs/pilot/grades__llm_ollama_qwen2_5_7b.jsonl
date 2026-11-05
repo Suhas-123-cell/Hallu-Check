@@ -1,0 +1,17 @@
+{"id": 778, "system": "pipeline", "judge": "llm:ollama:qwen2.5:7b", "abstained": false, "truthful": true, "raw": "TRUE", "error": null}
+{"id": 778, "system": "llama", "judge": "llm:ollama:qwen2.5:7b", "abstained": false, "truthful": false, "raw": "FALSE", "error": null}
+{"id": 778, "system": "gemini", "judge": "llm:ollama:qwen2.5:7b", "abstained": false, "truthful": true, "raw": "TRUE", "error": null}
+{"id": 778, "system": "gemini_rag", "judge": "llm:ollama:qwen2.5:7b", "abstained": false, "truthful": true, "raw": "TRUE", "error": null}
+{"id": 632, "system": "pipeline", "judge": "llm:ollama:qwen2.5:7b", "abstained": false, "truthful": false, "raw": "FALSE", "error": null}
+{"id": 632, "system": "llama", "judge": "llm:ollama:qwen2.5:7b", "abstained": false, "truthful": true, "raw": "TRUE", "error": null}
+{"id": 632, "system": "gemini", "judge": "llm:ollama:qwen2.5:7b", "abstained": false, "truthful": true, "raw": "TRUE", "error": null}
+{"id": 632, "system": "gemini_rag", "judge": "llm:ollama:qwen2.5:7b", "abstained": false, "truthful": true, "raw": "TRUE", "error": null}
+{"id": 624, "system": "pipeline", "judge": "llm:ollama:qwen2.5:7b", "abstained": false, "truthful": true, "raw": "TRUE", "error": null}
+{"id": 624, "system": "llama", "judge": "llm:ollama:qwen2.5:7b", "abstained": false, "truthful": true, "raw": "TRUE", "error": null}
+{"id": 624, "system": "gemini", "judge": "llm:ollama:qwen2.5:7b", "abstained": false, "truthful": true, "raw": "TRUE", "error": null}
+{"id": 624, "system": "gemini_rag", "judge": "llm:ollama:qwen2.5:7b", "abstained": false, "truthful": true, "raw": "TRUE", "error": null}
+{"id": 278, "system": "pipeline", "judge": "llm:ollama:qwen2.5:7b", "abstained": false, "truthful": false, "raw": "FALSE", "error": null}
+{"id": 278, "system": "llama", "judge": "llm:ollama:qwen2.5:7b", "abstained": false, "truthful": false, "raw": "FALSE", "error": null}
+{"id": 278, "system": "gemini", "judge": "llm:ollama:qwen2.5:7b", "abstained": false, "truthful": true, "raw": "TRUE", "error": null}
+{"id": 278, "system": "gemini_rag", "judge": "llm:ollama:qwen2.5:7b", "abstained": false, "truthful": true, "raw": "TRUE", "error": null}
+{"id": 104, "system": "llama", "judge": "llm:ollama:qwen2.5:7b", "abstained": false, "truthful": true, "raw": "TRUE", "error": null}
