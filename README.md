@@ -1,6 +1,15 @@
-# 🔍 Hallu-Check
+# Hallu-Check
 
-**An agentic multi-hop pipeline for detecting and correcting LLM hallucinations at the claim level — with recursive reasoning, self-consistency verification, and trained NLI classification.**
+> **Status: archived, superseded by [IntentShield](https://github.com/Suhas-123-cell/IntentShield).**
+> This was an exploratory prototype. It has no automated tests, CI or Docker image, and some
+> parts described in earlier versions of this README were never wired in:
+> - Claims are split into sentences with NLTK `sent_tokenize`, not extracted by Gemini.
+> - The self-consistency score is computed and logged, but not used in the hallucination score.
+> - `nodes/calibration.py` (Platt scaling) exists but is never called.
+> - The TruthfulQA and HaluEval numbers that used to be listed came from scripts and result files
+>   that are not in this repository, so they have been removed.
+
+An exploratory prototype of a claim-level hallucination detection and correction pipeline.
 
 Hallu-Check takes any natural-language query, generates an answer using a small LLM (Llama 3.2-1B), independently retrieves factual evidence from the web, verifies **each individual claim** against that evidence using a fine-tuned DeBERTa-v3 NLI model, and — if hallucinations are found — rewrites only the incorrect claims using a stronger model (Gemini 2.5 Flash). For complex reasoning queries, a **Recursive Language Model (RLM)** decomposes multi-step problems into isolated sub-questions, solving each in a fresh context to prevent working-memory loss.
 
@@ -20,11 +29,11 @@ Hallu-Check takes any natural-language query, generates an answer using a small 
 - **Recursive Language Model (RLM)** — Decomposes complex queries into 2–4 atomic sub-questions, solves each in a fresh isolated context (parallel), and recomposes the final answer — reducing working-memory hallucinations in small models *(MIT RLM, arXiv 2025)*
 - **Python Execution Tool** — RLM leaves can emit `<python>` blocks for arithmetic/algebra/combinatorics; executed in a sandboxed subprocess instead of computing token-by-token
 - **RAG Tool for RLM** — On FACTUAL queries, RLM leaves can emit `<rag>` blocks to query the same pre-built PageIndex tree — zero web re-scrape cost
-- **Self-Consistency Checking** — Generates multiple answers at varied temperatures and measures agreement via pairwise NLI entailment
+- **Self-Consistency Checking** — Generates multiple answers at varied temperatures and measures agreement via pairwise NLI entailment (logged only; not part of the score)
 
 ### Verification & Calibration
-- **Fine-Tuned DeBERTa-v3 NLI Model** — Trained on Multi-Genre NLI (MNLI) for deterministic, calibrated claim verification (~50ms per claim on MPS)
-- **Platt Scaling Calibration** — Logistic regression on NLI logits ensures confidence scores are properly calibrated (0.8 confidence ≈ 80% accuracy)
+- **Fine-Tuned DeBERTa-v3 NLI Model** — Trained on Multi-Genre NLI (MNLI) for deterministic claim verification (train it yourself with `train_nli.py`; no checkpoint is committed)
+- **Platt Scaling Calibration (not wired in)** — `nodes/calibration.py` fits logistic regression on NLI logits, but the pipeline never calls it
 - **NLI-Based Alignment Scoring** — Replaces BERTScore with entailment-based semantic alignment (catches "Modi is President" vs "Modi is PM" — BERTScore can't)
 - **Honest Uncertainty Detection** — Distinguishes "I don't know" from fabrication (zero API cost, regex-based)
 - **Route-Aware Refinement** — Factual queries get a strict evidence editor; code/logic queries get a Senior SWE tutor
@@ -144,7 +153,7 @@ Query: "Who is the Chief Minister of Andhra Pradesh?"
     └─────────────┬──────────────────────────────┘
               │
     ┌── Node 5: Claim Verifier ───────────────────────────────┐
-    │  Extract atomic claims                                   │
+    │  Split answer into sentences (NLTK)                      │
     │  claim_classifier routes each claim → factual/code/math  │
     │  factual → NLI, code/math → EGV                          │
     │  Score = 0.7×claims + 0.3×(1−alignment_score)            │
@@ -313,9 +322,9 @@ hallu-check/
 │   ├── recursive_reasoner.py         # Node 1.5/4.5 — RLM: decompose → solve → compose
 │   ├── web_search.py                 # Nodes 2+3 — Keywords, search, scrape, C-RAG, depth-2
 │   ├── pageindex_rag.py              # Node 4 — Vectorless RAG + NLI alignment scoring
-│   ├── claim_verifier.py             # Node 5 — Claim extraction (Gemini) + NLI verification
+│   ├── claim_verifier.py             # Node 5 — Claim splitting (NLTK) + NLI verification
 │   ├── nli_model.py                  # DeBERTa-v3 singleton — batch NLI classification
-│   ├── calibration.py                # Platt scaling for NLI confidence calibration
+│   ├── calibration.py                # Platt scaling (not called by the pipeline)
 │   ├── refiner.py                    # Node 6 — Route-aware evidence-based correction (Gemini)
 │   └── tools/
 │       └── python_exec.py            # Sandboxed Python executor for RLM computation leaves
@@ -352,11 +361,10 @@ hallu-check/
 | Keyword Extractor | Llama 3.2-1B-Instruct | HuggingFace API | Search term distillation |
 | C-RAG Evaluator | Llama 3.2-1B-Instruct | HuggingFace API | Chunk relevance filter |
 | PageIndex Tree Search | Llama 3.2-1B-Instruct | HuggingFace API | Node selection reasoning |
-| **NLI Verifier** | **DeBERTa-v3-base** | **Local (fine-tuned)** | **Claim verification (~50ms/claim)** |
-| Claim Extractor | Gemini 2.5 Flash | Google AI Studio | Atomic claim decomposition |
+| **NLI Verifier** | **DeBERTa-v3-base** | **Local (fine-tuned)** | **Claim verification** |
 | Refiner | Gemini 2.5 Flash | Google AI Studio | Evidence-based correction |
 
-> **Design philosophy:** Llama 3.2-1B (1B params) is intentionally small — it's the "test subject" that's likely to hallucinate. DeBERTa-v3 (86M params, trained on MNLI) provides fast, deterministic NLI verification. Gemini 2.5 Flash is the "editor" that extracts claims and corrects hallucinations.
+> **Design philosophy:** Llama 3.2-1B (1B params) is intentionally small — it's the "test subject" that's likely to hallucinate. DeBERTa-v3 (86M params, trained on MNLI) provides fast, deterministic NLI verification. Gemini 2.5 Flash is the "editor" that corrects hallucinations.
 
 ---
 
@@ -398,6 +406,9 @@ Query: "What is 17 × 23 + the population of France in millions?"
 ---
 
 ## 📊 Evaluation
+
+No reproducible results are committed. The runners in `benchmarks/` have not yet been run at full scale
+(only a 5-question pilot), so this README makes no accuracy claim.
 
 > **Earlier numbers withdrawn.** Previous versions of this README reported
 > "98.5% TruthfulQA detection" and "73.8% HaluEval recall". Neither is valid:
@@ -452,12 +463,11 @@ python -m benchmarks.eval_halueval report --run runs/halueval_lm
 | Decision | Rationale |
 |----------|-----------|
 | **Vectorless RAG** (PageIndex) | No embeddings, no vector DB — LLM reasons over document tree structure directly |
-| **Hybrid verification** (NLI + Gemini) | Gemini extracts claims (LLMs excel at decomposition), DeBERTa verifies (deterministic, fast, no sycophancy) |
+| **Hybrid verification** (NLI + Gemini) | DeBERTa verifies claims (deterministic, no sycophancy); Gemini rewrites the ones that fail |
 | **Recursive Language Model** | Isolates sub-steps in fresh contexts to prevent working-memory loss in small models — zero extra paid cost |
 | **Self-consistency checking** | Multi-temperature sampling + pairwise NLI detects instability before full pipeline runs |
 | **NLI alignment over BERTScore** | BERTScore measures word similarity, not factual correctness. NLI catches semantic contradictions |
-| **Platt scaling calibration** | Raw NLI softmax is overconfident; logistic regression on logits produces properly calibrated probabilities |
-| **Dual-model architecture** | Cheap LLM (Llama 1B) generates, DeBERTa (86M) verifies, powerful LLM (Gemini 2.5) extracts and corrects |
+| **Dual-model architecture** | Cheap LLM (Llama 1B) generates, DeBERTa (86M) verifies, powerful LLM (Gemini 2.5) corrects |
 | **C-RAG with auto query rewrite** | Doesn't blindly trust retrieved content — filters irrelevant chunks and retries with rewritten queries |
 | **Knowledge gap recovery** (Node 5.5) | UNVERIFIABLE claims trigger targeted supplementary searches before giving up |
 | **Python executor for RLM** | Small models hallucinate numbers; Python doesn't. Sandboxed subprocess with 5s timeout |
@@ -473,13 +483,13 @@ python -m benchmarks.eval_halueval report --run runs/halueval_lm
 |------------|---------|
 | FastAPI + Uvicorn | Web framework & ASGI server |
 | `huggingface-hub` | LLM inference (Llama 3.2-1B) |
-| `google-genai` | Gemini API (claim extraction + refinement) |
+| `google-genai` | Gemini API (refinement) |
 | `transformers` + `torch` | DeBERTa-v3 NLI model (local inference) |
 | `ddgs` | DuckDuckGo web search |
 | `httpx` + `beautifulsoup4` + `lxml` | Web scraping |
 | PageIndex (vendored) | Vectorless tree-index RAG |
 | `datasets` + `accelerate` | NLI model training (MNLI dataset) |
-| `scikit-learn` | Platt scaling calibration + metrics |
+| `scikit-learn` | Platt scaling (unused) + metrics |
 | NLTK | NER + tokenization |
 | `tenacity` | Retry logic with backoff |
 | `tiktoken` | Token counting for PageIndex |
