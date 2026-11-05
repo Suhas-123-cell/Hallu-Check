@@ -14,7 +14,7 @@ from typing import Any, Dict, List
 # NLI alignment measures actual entailment — semantically correct.
 
 import tiktoken  # type: ignore[import-untyped]
-from huggingface_hub import InferenceClient  # type: ignore[import-untyped, import-not-found]
+from nodes.llm_client import make_client  # type: ignore[import-not-found]
 
 from config import HF_API_TOKEN, LOCAL_MODEL_ID  # type: ignore[import-untyped]
 
@@ -42,7 +42,7 @@ def _setup_llm():
 
 def _hf_chat(model_name: str, prompt: str, **_kwargs) -> str:
     _setup_llm()
-    client = InferenceClient(api_key=HF_API_TOKEN, timeout=120)
+    client = make_client(timeout=120)
     response = client.chat_completion(
         model=LOCAL_MODEL_ID,
         messages=[
@@ -62,7 +62,7 @@ async def _hf_chat_async(model_name: str, prompt: str, **_kwargs) -> str:
     loop = asyncio.get_running_loop()
 
     def _call() -> str:
-        client = InferenceClient(api_key=HF_API_TOKEN, timeout=120)
+        client = make_client(timeout=120)
         response = client.chat_completion(
             model=LOCAL_MODEL_ID,
             messages=[

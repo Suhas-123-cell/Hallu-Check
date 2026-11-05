@@ -330,10 +330,13 @@ hallu-check/
 │       └── python_exec.py            # Sandboxed Python executor for RLM computation leaves
 │
 ├── benchmarks/
-│   ├── ablation.py                   # Ablation runner
-│   ├── eval_e2e.py                   # End-to-end pipeline runner
-│   ├── eval_gsm8k.py                 # GSM8K reasoning runner
-│   └── eval_humaneval_egv.py         # HumanEval execution-verifier runner
+│   ├── harness.py                    # Leakage controls, flag patching, stats (CIs, McNemar, AUROC)
+│   ├── graders.py                    # Independent graders (non-pipeline NLI, non-Gemini LLM judge)
+│   ├── eval_e2e.py                   # TruthfulQA end-to-end vs. Llama / Gemini / Gemini+RAG baselines
+│   ├── eval_halueval.py              # HaluEval-QA detection (AUROC, dev-tuned threshold)
+│   ├── ablation.py                   # Pipeline ablations on a frozen web corpus
+│   ├── eval_gsm8k.py                 # GSM8K (REASONING route)
+│   └── eval_humaneval_egv.py         # HumanEval EGV (REASONING route)
 │
 ├── models/
 │   └── nli-deberta-v3-mnli/          # Trained NLI model checkpoint
@@ -402,10 +405,56 @@ Query: "What is 17 × 23 + the population of France in millions?"
 
 ---
 
-## 📊 Benchmark Results
+## 📊 Evaluation
 
-No reproducible results are committed. The runners in `benchmarks/` have not been run to produce
-stored output, so this README makes no accuracy claim.
+No reproducible results are committed. The runners in `benchmarks/` have not yet been run at full scale
+(only a 5-question pilot), so this README makes no accuracy claim.
+
+> **Earlier numbers withdrawn.** Previous versions of this README reported
+> "98.5% TruthfulQA detection" and "73.8% HaluEval recall". Neither is valid:
+> the TruthfulQA script only checked that a known-wrong answer was *not entailed*
+> by the known-right one (no correct answers tested; an always-"hallucinated"
+> classifier scores 100%), and the HaluEval run had 48% accuracy on a balanced
+> task, flagging 78% of correct answers. The end-to-end harness that followed
+> fed TruthfulQA's gold answer to the verifier and refiner as "evidence".
+> New results will be reported only from the protocol below.
+
+**Protocol** (`benchmarks/`):
+
+- **No answer-key leakage.** Systems receive only the question. Evidence comes
+  from live web retrieval with benchmark-hosting domains (HF, GitHub, arXiv, …)
+  and any page mentioning the benchmark blocked; the blocked pages are logged
+  per sample.
+- **Independent grading.** Never the pipeline's own NLI checkpoint and never
+  Gemini (which writes the pipeline's answers). Default: a separately trained
+  public NLI model against TruthfulQA's reference sets, plus an optional
+  non-Gemini LLM judge, both validated against a blinded human-labelled subset.
+- **Baselines that can falsify the method.** Raw generator; Gemini closed-book;
+  Gemini given the *same* retrieved evidence. If the pipeline does not beat
+  Gemini + evidence, the verification loop is not adding value.
+- **Controlled ablations.** All variants share the same seeded questions and the
+  same frozen web corpus; flags are patched in-process (env-var toggles never
+  reached the pipeline — `config.py` uses `load_dotenv(override=True)`).
+- **Statistics.** 95% bootstrap CIs, paired bootstrap Δ and exact McNemar tests,
+  AUROC for detection, thresholds tuned on a dev split only, failures reported
+  rather than scored.
+- **HaluEval caveat.** Answer length alone reaches AUROC ≈ 0.98 on HaluEval-QA,
+  so a length baseline is always reported and the length-matched subset is the
+  controlled evaluation.
+
+```bash
+# TruthfulQA end-to-end (main result + ablations share one run directory)
+python -m benchmarks.eval_e2e generate --run runs/tqa --samples 200
+python -m benchmarks.ablation          --run runs/tqa --samples 200
+python -m benchmarks.eval_e2e grade    --run runs/tqa --judge nli
+python -m benchmarks.eval_e2e grade    --run runs/tqa --judge llm
+python -m benchmarks.eval_e2e export-human --run runs/tqa --n 100
+python -m benchmarks.eval_e2e report   --run runs/tqa --human runs/tqa/human_sheet.csv
+
+# HaluEval-QA detection (verifier only, knowledge passage given)
+python -m benchmarks.eval_halueval run    --run runs/halueval_lm --questions 500 --length-matched
+python -m benchmarks.eval_halueval report --run runs/halueval_lm
+```
 
 ---
 

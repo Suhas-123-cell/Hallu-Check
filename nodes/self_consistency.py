@@ -4,7 +4,7 @@ import logging
 import time
 from typing import Dict, List, Optional, Tuple
 
-from huggingface_hub import InferenceClient  # type: ignore[import-untyped, import-not-found]
+from nodes.llm_client import make_client  # type: ignore[import-not-found]
 
 from config import (  # type: ignore[import-not-found]
     HF_API_TOKEN,
@@ -23,7 +23,7 @@ def _generate_answer(query: str, temperature: float, timeout: int = 120) -> str:
         return ""
 
     try:
-        client = InferenceClient(api_key=HF_API_TOKEN, timeout=timeout)
+        client = make_client(timeout=timeout)
         response = client.chat_completion(
             model=LOCAL_MODEL_ID,
             messages=[

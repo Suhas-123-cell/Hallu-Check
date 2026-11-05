@@ -212,7 +212,7 @@ def _search_fallback(
 
 
 # ── LLM for keyword extraction (uses HuggingFace / Qwen) ─────────────────────
-from huggingface_hub import InferenceClient  # type: ignore[import-untyped, import-not-found]
+from nodes.llm_client import make_client  # type: ignore[import-not-found]
 from config import HF_API_TOKEN, LOCAL_MODEL_ID  # type: ignore[import-not-found]
 
 
@@ -222,7 +222,7 @@ def _hf_extract_keywords(prompt: str) -> str:
         return ""
 
     try:
-        client = InferenceClient(api_key=HF_API_TOKEN, timeout=120)
+        client = make_client(timeout=120)
         response = client.chat_completion(
             model=LOCAL_MODEL_ID,
             messages=[
@@ -945,7 +945,7 @@ def _evaluate_chunk_relevance(text: str, query: str) -> bool:
     )
 
     try:
-        client = InferenceClient(api_key=HF_API_TOKEN, timeout=120)
+        client = make_client(timeout=120)
         response = client.chat_completion(
             model=LOCAL_MODEL_ID,
             messages=[
@@ -985,7 +985,7 @@ def _rewrite_query(query: str, keywords: List[str]) -> List[str]:
     )
 
     try:
-        client = InferenceClient(api_key=HF_API_TOKEN, timeout=120)
+        client = make_client(timeout=120)
         response = client.chat_completion(
             model=LOCAL_MODEL_ID,
             messages=[
