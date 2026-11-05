@@ -1,14 +1,5 @@
 # Hallu-Check
 
-> **Status: archived, superseded by [IntentShield](https://github.com/Suhas-123-cell/IntentShield).**
-> This was an exploratory prototype. It has no automated tests, CI or Docker image, and some
-> parts described in earlier versions of this README were never wired in:
-> - Claims are split into sentences with NLTK `sent_tokenize`, not extracted by Gemini.
-> - The self-consistency score is computed and logged, but not used in the hallucination score.
-> - `nodes/calibration.py` (Platt scaling) exists but is never called.
-> - The TruthfulQA and HaluEval numbers that used to be listed came from scripts and result files
->   that are not in this repository, so they have been removed.
-
 An exploratory prototype of a claim-level hallucination detection and correction pipeline.
 
 Hallu-Check takes any natural-language query, generates an answer using a small LLM (Llama 3.2-1B), independently retrieves factual evidence from the web, verifies **each individual claim** against that evidence using a fine-tuned DeBERTa-v3 NLI model, and — if hallucinations are found — rewrites only the incorrect claims using a stronger model (Gemini 2.5 Flash). For complex reasoning queries, a **Recursive Language Model (RLM)** decomposes multi-step problems into isolated sub-questions, solving each in a fresh context to prevent working-memory loss.
